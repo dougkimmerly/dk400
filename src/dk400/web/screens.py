@@ -3260,11 +3260,20 @@ class ScreenManager:
         while len(content) < 21:
             content.append(pad_line(""))
 
-        # Page indicator and navigation
-        if page < 3:
-            content.append(pad_line("                                                          More..."))
+        # Page indicator and navigation with clickable hotspots
+        nav_line = []
+        if page > 1:
+            nav_line.append({"type": "text", "text": "                                                    "})
+            nav_line.append({"type": "hotspot", "text": "<Prev>", "action": "page_up"})
+            nav_line.append({"type": "text", "text": "  "})
         else:
-            content.append(pad_line("                                                          Bottom"))
+            nav_line.append({"type": "text", "text": "                                                          "})
+
+        if page < 3:
+            nav_line.append({"type": "hotspot", "text": "<More>", "action": "page_down"})
+        else:
+            nav_line.append({"type": "text", "text": "Bottom"})
+        content.append(nav_line)
 
         msg = session.message if session.message else ""
         content.append(pad_line(f" {msg}"))

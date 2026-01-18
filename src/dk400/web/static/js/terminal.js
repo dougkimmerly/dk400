@@ -195,6 +195,11 @@ class Terminal5250 {
                             autocapitalize="off"
                             spellcheck="false"
                         >`;
+                    } else if (segment.type === 'hotspot') {
+                        // Clickable hotspot (like More.../Prev for page navigation)
+                        const action = segment.action || '';
+                        const cssClass = segment.class || 'hotspot';
+                        html += `<span class="${cssClass}" data-action="${action}">${this.escapeHtml(segment.text)}</span>`;
                     }
                 });
             }
@@ -624,6 +629,15 @@ class Terminal5250 {
                 const key = e.target.dataset.key;
                 if (key) {
                     this.handleFunctionKey(key);
+                }
+            }
+            // Handle clicks on hotspots (More.../Prev navigation)
+            if (e.target.classList.contains('hotspot')) {
+                const action = e.target.dataset.action;
+                if (action === 'page_down' || action === 'roll_down') {
+                    this.handleRoll('down');
+                } else if (action === 'page_up' || action === 'roll_up') {
+                    this.handleRoll('up');
                 }
             }
         });

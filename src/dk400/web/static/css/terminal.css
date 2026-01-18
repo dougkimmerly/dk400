@@ -193,6 +193,16 @@ html, body {
     color: var(--phosphor-bright);
 }
 
+/* Clickable hotspots (More.../Prev navigation) */
+.hotspot {
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.hotspot:hover {
+    color: var(--phosphor-bright);
+}
+
 /* Scanlines overlay */
 .scanlines {
     position: fixed;
