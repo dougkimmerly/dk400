@@ -97,6 +97,25 @@ CREATE TABLE IF NOT EXISTS object_authorities (
 -- Index for object authority lookups
 CREATE INDEX IF NOT EXISTS idx_objauth_object ON object_authorities(object_type, object_name);
 CREATE INDEX IF NOT EXISTS idx_objauth_user ON object_authorities(username);
+
+-- System values table (AS/400-style WRKSYSVAL)
+CREATE TABLE IF NOT EXISTS system_values (
+    name VARCHAR(20) PRIMARY KEY,
+    value VARCHAR(256) NOT NULL,
+    description VARCHAR(100) DEFAULT '',
+    category VARCHAR(20) DEFAULT 'SYSTEM',
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by VARCHAR(10) DEFAULT 'SYSTEM'
+);
+
+-- Default system values
+INSERT INTO system_values (name, value, description, category) VALUES
+    ('QSYSNAME', 'DK400', 'System name', 'SYSTEM'),
+    ('QLOGOSIZE', '*SMALL', 'Logo display size (*FULL, *SMALL, *NONE)', 'DISPLAY'),
+    ('QDATFMT', '*MDY', 'Date format (*MDY, *DMY, *YMD, *ISO)', 'DATETIME'),
+    ('QTIMSEP', ':', 'Time separator character', 'DATETIME'),
+    ('QDATSEP', '/', 'Date separator character', 'DATETIME')
+ON CONFLICT (name) DO NOTHING;
 """
 
 
@@ -1233,3 +1252,111 @@ def get_effective_authorities(username: str) -> list[dict]:
                 direct.append(auth)
 
     return direct
+
+
+# =============================================================================
+# System Values (AS/400-style WRKSYSVAL)
+# =============================================================================
+
+# Cache for system values to avoid repeated DB queries
+_sysval_cache: dict[str, str] = {}
+
+
+def get_system_value(name: str, default: str = '') -> str:
+    """
+    Get a system value by name.
+    Values are cached for performance.
+    """
+    name = name.upper().strip()
+
+    # Check cache first
+    if name in _sysval_cache:
+        return _sysval_cache[name]
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT value FROM system_values WHERE name = %s",
+                (name,)
+            )
+            row = cursor.fetchone()
+            if row:
+                _sysval_cache[name] = row['value']
+                return row['value']
+    except Exception as e:
+        logger.error(f"Failed to get system value {name}: {e}")
+
+    return default
+
+
+def set_system_value(name: str, value: str, updated_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """
+    Set a system value.
+    Clears the cache for this value.
+    """
+    name = name.upper().strip()
+    updated_by = updated_by.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE system_values
+                SET value = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
+                WHERE name = %s
+            """, (value, updated_by, name))
+
+            if cursor.rowcount == 0:
+                return False, f"System value {name} not found"
+
+        # Clear cache
+        if name in _sysval_cache:
+            del _sysval_cache[name]
+
+        logger.info(f"System value {name} changed to {value} by {updated_by}")
+        return True, f"System value {name} changed"
+
+    except Exception as e:
+        logger.error(f"Failed to set system value {name}: {e}")
+        return False, f"Failed to set system value: {e}"
+
+
+def list_system_values(category: str = None) -> list[dict]:
+    """
+    List all system values, optionally filtered by category.
+    """
+    values = []
+    try:
+        with get_cursor() as cursor:
+            if category:
+                cursor.execute("""
+                    SELECT name, value, description, category, updated_at, updated_by
+                    FROM system_values
+                    WHERE category = %s
+                    ORDER BY name
+                """, (category.upper(),))
+            else:
+                cursor.execute("""
+                    SELECT name, value, description, category, updated_at, updated_by
+                    FROM system_values
+                    ORDER BY category, name
+                """)
+
+            for row in cursor.fetchall():
+                values.append({
+                    'name': row['name'],
+                    'value': row['value'],
+                    'description': row['description'],
+                    'category': row['category'],
+                    'updated_at': str(row['updated_at']) if row['updated_at'] else '',
+                    'updated_by': row['updated_by'],
+                })
+    except Exception as e:
+        logger.error(f"Failed to list system values: {e}")
+
+    return values
+
+
+def clear_sysval_cache():
+    """Clear the system value cache."""
+    global _sysval_cache
+    _sysval_cache = {}

@@ -16,7 +16,8 @@ from src.dk400.web.users import user_manager, UserProfile
 from src.dk400.web.database import (
     create_schema, drop_schema, list_schemas, list_schema_tables,
     grant_object_authority, revoke_object_authority, get_object_authorities,
-    get_effective_authorities, get_user_group, AUTHORITY_GRANTS
+    get_effective_authorities, get_user_group, AUTHORITY_GRANTS,
+    get_system_value, set_system_value, list_system_values
 )
 
 
@@ -35,9 +36,12 @@ def get_celery_app() -> Celery:
 
 
 def get_system_info() -> tuple[str, str, str]:
-    """Get system hostname and current timestamp."""
-    # Use DK400_SYSTEM_NAME env var, falling back to DK400
-    hostname = os.environ.get('DK400_SYSTEM_NAME', 'DK400').upper()[:12]
+    """Get system name and current timestamp."""
+    # Use QSYSNAME system value, with env var as fallback
+    try:
+        hostname = get_system_value('QSYSNAME', 'DK400').upper()[:12]
+    except Exception:
+        hostname = os.environ.get('DK400_SYSTEM_NAME', 'DK400').upper()[:12]
     date_str = datetime.now().strftime("%m/%d/%y")
     time_str = datetime.now().strftime("%H:%M:%S")
     return hostname, date_str, time_str
@@ -55,12 +59,25 @@ def center_text(text: str, width: int = COLS_80) -> str:
     return text.center(width)
 
 
-LOGO = """\
+LOGO_FULL = """\
   ____  _  ______ ___   ___   ___
  |  _ \\| |/ / / // _ \\ / _ \\ / _ \\
  | | | | ' / / /| | | | | | | | | |
  | |_| | . \\/ /_| |_| | |_| | |_| |
  |____/|_|\\_\\____|\\___/ \\___/ \\___/ """
+
+LOGO_SMALL = "  DK/400"
+
+
+def get_logo() -> str:
+    """Get the logo based on QLOGOSIZE system value."""
+    logo_size = get_system_value('QLOGOSIZE', '*SMALL')
+    if logo_size == '*FULL':
+        return LOGO_FULL
+    elif logo_size == '*NONE':
+        return ""
+    else:  # *SMALL or default
+        return LOGO_SMALL
 
 
 @dataclass
@@ -113,6 +130,10 @@ class ScreenManager:
         'GRTOBJAUT': 'grtobjaut',
         'RVKOBJAUT': 'rvkobjaut',
         'DSPOBJAUT': 'dspobjaut',
+        # System values
+        'WRKSYSVAL': 'wrksysval',
+        'DSPSYSVAL': 'wrksysval',  # Alias
+        'CHGSYSVAL': 'chgsysval',
         'SIGNOFF': 'signon',
         'GO': 'main',
         '1': 'wrkactjob',
@@ -361,8 +382,10 @@ class ScreenManager:
         hostname, date_str, time_str = get_system_info()
 
         content = []
-        for line in LOGO.split('\n'):
-            content.append(pad_line(line))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(line))
 
         content.extend([
             pad_line(""),
@@ -2354,8 +2377,10 @@ class ScreenManager:
         content = []
 
         # Header
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Work with User Profiles                              {hostname}"))
@@ -2474,8 +2499,10 @@ class ScreenManager:
 
         content = []
 
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Display User Profile                                 {hostname}"))
@@ -2526,8 +2553,10 @@ class ScreenManager:
 
         content = []
 
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Display User Authorities                             {hostname}"))
@@ -2584,8 +2613,10 @@ class ScreenManager:
 
         content = []
 
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Change Password                                      {hostname}"))
@@ -2682,8 +2713,10 @@ class ScreenManager:
 
         content = []
 
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Create User Profile (CRTUSRPRF)                      {hostname}"))
@@ -2817,8 +2850,10 @@ class ScreenManager:
         content = []
 
         # Header
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Work with Schemas (Libraries)                        {hostname}"))
@@ -2923,8 +2958,10 @@ class ScreenManager:
 
         content = []
 
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Create Schema (CRTSCHEMA)                            {hostname}"))
@@ -3005,8 +3042,10 @@ class ScreenManager:
 
         content = []
 
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Display Schema Tables                                {hostname}"))
@@ -3048,8 +3087,10 @@ class ScreenManager:
 
         content = []
 
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Grant Object Authority (GRTOBJAUT)                   {hostname}"))
@@ -3156,8 +3197,10 @@ class ScreenManager:
 
         content = []
 
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Revoke Object Authority (RVKOBJAUT)                  {hostname}"))
@@ -3258,8 +3301,10 @@ class ScreenManager:
 
         content = []
 
-        for line in LOGO.split('\n'):
-            content.append(pad_line(f"  {line}"))
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
 
         content.append(pad_line(""))
         content.append(pad_line(f"  Display Object Authorities                           {hostname}"))
@@ -3307,3 +3352,166 @@ class ScreenManager:
             "fields": [],
             "activeField": -1,
         }
+
+    # ========== SYSTEM VALUES SCREENS ==========
+
+    def _screen_wrksysval(self, session: Session) -> dict:
+        """Work with System Values screen."""
+        # Only security officers can manage system values
+        if session.user_class not in ('*SECOFR', '*SECADM'):
+            session.message = "Not authorized to system values"
+            session.message_level = "error"
+            return self.get_screen(session, 'main')
+
+        hostname, date_str, time_str = get_system_info()
+
+        sysvals = list_system_values()
+        offset = session.get_offset('wrksysval')
+        page_size = 10
+
+        content = []
+
+        # Header with configurable logo
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Work with System Values                              {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line("  Type option, press Enter."))
+        content.append(pad_line("    2=Change"))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append(pad_line("  Opt  System Value    Value                Category"))
+
+        # System values list
+        fields = []
+        page_vals = sysvals[offset:offset + page_size]
+
+        for i, sv in enumerate(page_vals):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            content.append([
+                {"type": "text", "text": "  "},
+                {"type": "input", "id": field_id, "width": 3, "value": ""},
+                {"type": "text", "text": f"  {sv['name']:<14} {sv['value']:<20} {sv['category']}"},
+            ])
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_vals)):
+            content.append(pad_line(""))
+
+        # Footer
+        more = "More..." if len(sysvals) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrksysval",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_wrksysval(self, session: Session, fields: dict) -> dict:
+        """Handle Work with System Values submission."""
+        sysvals = list_system_values()
+        offset = session.get_offset('wrksysval')
+        page_size = 10
+        page_vals = sysvals[offset:offset + page_size]
+
+        for i, sv in enumerate(page_vals):
+            opt = fields.get(f"opt_{i}", "").strip()
+            if opt == '2':  # Change
+                session.field_values['selected_sysval'] = sv['name']
+                session.field_values['sysval_value'] = sv['value']
+                session.field_values['sysval_desc'] = sv['description']
+                return self.get_screen(session, 'chgsysval')
+
+        return self.get_screen(session, 'wrksysval')
+
+    def _screen_chgsysval(self, session: Session) -> dict:
+        """Change System Value screen."""
+        hostname, date_str, time_str = get_system_info()
+        sysval_name = session.field_values.get('selected_sysval', '')
+        sysval_value = session.field_values.get('sysval_value', '')
+        sysval_desc = session.field_values.get('sysval_desc', '')
+
+        content = []
+
+        # Header with configurable logo
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Change System Value                                  {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"    System value  . . . . . . . :   {sysval_name}"))
+        content.append(pad_line(f"    Description . . . . . . . . :   {sysval_desc}"))
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    Value . . . . . . . . . . . :   "},
+            {"type": "input", "id": "new_value", "width": 30, "value": sysval_value},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "chgsysval",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "new_value"}],
+            "activeField": 0,
+        }
+
+    def _submit_chgsysval(self, session: Session, fields: dict) -> dict:
+        """Handle Change System Value submission."""
+        sysval_name = session.field_values.get('selected_sysval', '')
+        new_value = fields.get('new_value', '').strip()
+
+        if not new_value:
+            session.message = "Value is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'chgsysval')
+
+        success, msg = set_system_value(sysval_name, new_value, session.user)
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrksysval')
+        return self.get_screen(session, 'chgsysval')
