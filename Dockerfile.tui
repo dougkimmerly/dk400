@@ -14,9 +14,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # SSH server setup
 RUN mkdir -p /var/run/sshd
-RUN echo 'root:dk400' | chpasswd
-RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+
+# Create dk400 user with no password (like a 5250 terminal - just connect)
+RUN useradd -m -s /bin/bash dk400
+RUN passwd -d dk400
+
+# Allow empty passwords and dk400 user login
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin no/' /etc/ssh/sshd_config
+RUN sed -i 's/#PermitEmptyPasswords no/PermitEmptyPasswords yes/' /etc/ssh/sshd_config
 RUN sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+RUN echo "AllowUsers dk400" >> /etc/ssh/sshd_config
 
 # Copy source
 COPY src/ /app/src/
@@ -29,9 +36,9 @@ RUN chmod +x /entrypoint.sh
 RUN echo '#!/bin/bash\ncd /app\nexport PYTHONPATH=/app\nexec python3 /app/src/dk400/tui/main.py' > /usr/local/bin/dk400-tui \
     && chmod +x /usr/local/bin/dk400-tui
 
-# Add TUI to shells and set as default for root
+# Add TUI to shells and set as default for dk400 user
 RUN echo '/usr/local/bin/dk400-tui' >> /etc/shells
-RUN chsh -s /usr/local/bin/dk400-tui root
+RUN chsh -s /usr/local/bin/dk400-tui dk400
 
 EXPOSE 22
 
