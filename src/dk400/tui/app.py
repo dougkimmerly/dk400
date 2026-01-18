@@ -12,6 +12,7 @@ from datetime import datetime
 import socket
 
 from src.dk400.tui.screens.wrkactjob import WrkActJobScreen
+from src.dk400.tui.screens.dspsyssts import DspSysStsScreen
 
 
 LOGO = r"""
@@ -393,7 +394,8 @@ class MainMenuScreen(Screen):
         self._show_message("WRKSVC - Coming soon")
 
     def action_dspsyssts(self) -> None:
-        self._show_message("DSPSYSSTS - Coming soon")
+        """Display system status."""
+        self.app.push_screen("dspsyssts")
 
     def action_dsplog(self) -> None:
         self._show_message("DSPLOG - Coming soon")
@@ -423,6 +425,7 @@ class DK400App(App):
         "signon": SignOnScreen,
         "main": MainMenuScreen,
         "wrkactjob": WrkActJobScreen,
+        "dspsyssts": DspSysStsScreen,
     }
 
     def __init__(self):
