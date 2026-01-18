@@ -167,7 +167,7 @@ class UserManager:
         try:
             with get_cursor() as cursor:
                 cursor.execute("""
-                    INSERT INTO users (
+                    INSERT INTO qsys.users (
                         username, password_hash, salt, user_class,
                         status, description, group_profile, created
                     ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -219,7 +219,7 @@ class UserManager:
         try:
             with get_cursor() as cursor:
                 cursor.execute(
-                    "DELETE FROM users WHERE username = %s",
+                    "DELETE FROM qsys.users WHERE username = %s",
                     (username,)
                 )
 
@@ -251,7 +251,7 @@ class UserManager:
         try:
             with get_cursor() as cursor:
                 cursor.execute("""
-                    UPDATE users
+                    UPDATE qsys.users
                     SET password_hash = %s, salt = %s
                     WHERE username = %s
                 """, (password_hash, salt, username))
@@ -312,7 +312,7 @@ class UserManager:
             try:
                 with get_cursor() as cursor:
                     cursor.execute("""
-                        UPDATE users
+                        UPDATE qsys.users
                         SET signon_attempts = signon_attempts + 1
                         WHERE username = %s
                     """, (username,))
@@ -324,7 +324,7 @@ class UserManager:
         try:
             with get_cursor() as cursor:
                 cursor.execute("""
-                    UPDATE users
+                    UPDATE qsys.users
                     SET signon_attempts = 0, last_signon = %s
                     WHERE username = %s
                 """, (datetime.now(), username))
@@ -342,7 +342,7 @@ class UserManager:
         try:
             with get_cursor() as cursor:
                 cursor.execute(
-                    "SELECT * FROM users WHERE username = %s",
+                    "SELECT * FROM qsys.users WHERE username = %s",
                     (username,)
                 )
                 row = cursor.fetchone()
@@ -360,7 +360,7 @@ class UserManager:
         users = []
         try:
             with get_cursor() as cursor:
-                cursor.execute("SELECT * FROM users ORDER BY username")
+                cursor.execute("SELECT * FROM qsys.users ORDER BY username")
                 for row in cursor.fetchall():
                     users.append(UserProfile.from_row(row))
         except Exception as e:
@@ -380,7 +380,7 @@ class UserManager:
         try:
             with get_cursor() as cursor:
                 cursor.execute("""
-                    UPDATE users SET status = '*ENABLED' WHERE username = %s
+                    UPDATE qsys.users SET status = '*ENABLED' WHERE username = %s
                 """, (username,))
 
             # Enable PostgreSQL role login
@@ -408,7 +408,7 @@ class UserManager:
         try:
             with get_cursor() as cursor:
                 cursor.execute("""
-                    UPDATE users SET status = '*DISABLED' WHERE username = %s
+                    UPDATE qsys.users SET status = '*DISABLED' WHERE username = %s
                 """, (username,))
 
             # Disable PostgreSQL role login
