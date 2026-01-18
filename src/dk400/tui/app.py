@@ -201,15 +201,27 @@ class MainMenuScreen(Screen):
         Binding("f3", "sign_off", "Sign Off", show=True),
         Binding("f5", "refresh", "Refresh", show=True),
         Binding("f12", "previous", "Cancel", show=True),
-        Binding("1", "wrkactjob", "WRKACTJOB", show=False),
-        Binding("2", "wrkjobq", "WRKJOBQ", show=False),
-        Binding("3", "wrksvc", "WRKSVC", show=False),
-        Binding("4", "dspsyssts", "DSPSYSSTS", show=False),
-        Binding("5", "dsplog", "DSPLOG", show=False),
-        Binding("6", "sbmjob", "SBMJOB", show=False),
-        Binding("9", "signoff", "SIGNOFF", show=False),
-        Binding("90", "signoff", "SIGNOFF", show=False),
     ]
+
+    # Command mapping - AS/400 commands to actions
+    COMMANDS = {
+        # Full commands
+        'WRKACTJOB': 'wrkactjob',
+        'WRKJOBQ': 'wrkjobq',
+        'WRKSVC': 'wrksvc',
+        'DSPSYSSTS': 'dspsyssts',
+        'DSPLOG': 'dsplog',
+        'SBMJOB': 'sbmjob',
+        'SIGNOFF': 'signoff',
+        # Menu numbers
+        '1': 'wrkactjob',
+        '2': 'wrkjobq',
+        '3': 'wrksvc',
+        '4': 'dspsyssts',
+        '5': 'dsplog',
+        '6': 'sbmjob',
+        '90': 'signoff',
+    }
 
     CSS = """
     MainMenuScreen {
@@ -221,7 +233,41 @@ class MainMenuScreen(Screen):
         background: #000000;
         padding: 1 2;
         width: 100%;
-        height: 100%;
+        height: 1fr;
+    }
+
+    #cmd-line-container {
+        height: auto;
+        width: 100%;
+        padding: 0 2;
+        background: #000000;
+    }
+
+    #cmd-label {
+        color: #00ff00;
+        background: #000000;
+        width: auto;
+        height: 1;
+    }
+
+    #cmd-input {
+        background: #000000;
+        color: #00ff00;
+        border: none;
+        width: 1fr;
+        height: 1;
+        padding: 0;
+    }
+
+    #cmd-input:focus {
+        background: #002200;
+    }
+
+    #message-line {
+        color: #ffff00;
+        background: #000000;
+        height: 1;
+        padding: 0 2;
     }
 
     Header {
@@ -238,6 +284,12 @@ class MainMenuScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Static(self.get_menu_text(), id="menu-content")
+        yield Static("", id="message-line")
+        yield Horizontal(
+            Static("  ===> ", id="cmd-label"),
+            Input(placeholder="", id="cmd-input"),
+            id="cmd-line-container"
+        )
         yield Footer()
 
     def get_menu_text(self) -> str:
@@ -264,17 +316,59 @@ class MainMenuScreen(Screen):
       90. Sign off                      SIGNOFF
 
 
-  Selection or command
-  ===> _
-"""
+  Selection or command"""
 
     def on_mount(self) -> None:
-        """Refresh menu on mount."""
+        """Focus command input on mount."""
         self.query_one("#menu-content", Static).update(self.get_menu_text())
+        self.query_one("#cmd-input", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle command input."""
+        if event.input.id == "cmd-input":
+            cmd = event.input.value.strip().upper()
+            event.input.value = ""  # Clear input
+
+            if not cmd:
+                self._show_message("")
+                return
+
+            self._execute_command(cmd)
+
+    def _execute_command(self, cmd: str) -> None:
+        """Execute an AS/400 command."""
+        # Check for exact match first
+        if cmd in self.COMMANDS:
+            action = self.COMMANDS[cmd]
+            method = getattr(self, f'action_{action}', None)
+            if method:
+                self._show_message("")
+                method()
+                return
+
+        # Check for partial command match (e.g., "WRKA" matches "WRKACTJOB")
+        matches = [c for c in self.COMMANDS.keys() if c.startswith(cmd) and not c.isdigit()]
+        if len(matches) == 1:
+            action = self.COMMANDS[matches[0]]
+            method = getattr(self, f'action_{action}', None)
+            if method:
+                self._show_message("")
+                method()
+                return
+        elif len(matches) > 1:
+            self._show_message(f"Ambiguous command: {', '.join(matches)}")
+            return
+
+        self._show_message(f"Command {cmd} not found")
+
+    def _show_message(self, message: str) -> None:
+        """Show message on the message line."""
+        self.query_one("#message-line", Static).update(f"  {message}")
 
     def action_refresh(self) -> None:
         """Refresh the display."""
         self.query_one("#menu-content", Static).update(self.get_menu_text())
+        self._show_message("")
 
     def action_sign_off(self) -> None:
         """Sign off and return to sign-on screen."""
@@ -293,19 +387,19 @@ class MainMenuScreen(Screen):
         self.app.push_screen("wrkactjob")
 
     def action_wrkjobq(self) -> None:
-        self.notify("WRKJOBQ - Coming in Phase 1!", title="DK/400")
+        self._show_message("WRKJOBQ - Coming soon")
 
     def action_wrksvc(self) -> None:
-        self.notify("WRKSVC - Coming in Phase 1!", title="DK/400")
+        self._show_message("WRKSVC - Coming soon")
 
     def action_dspsyssts(self) -> None:
-        self.notify("DSPSYSSTS - Coming in Phase 1!", title="DK/400")
+        self._show_message("DSPSYSSTS - Coming soon")
 
     def action_dsplog(self) -> None:
-        self.notify("DSPLOG - Coming in Phase 1!", title="DK/400")
+        self._show_message("DSPLOG - Coming soon")
 
     def action_sbmjob(self) -> None:
-        self.notify("SBMJOB - Coming in Phase 1!", title="DK/400")
+        self._show_message("SBMJOB - Coming soon")
 
 
 class DK400App(App):
