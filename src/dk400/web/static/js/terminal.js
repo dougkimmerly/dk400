@@ -534,13 +534,6 @@ class Terminal5250 {
                 <div class="screen-content">
                     <div class="connecting">Initializing DK/400...</div>
                 </div>
-                <div class="function-keys">
-                    <span class="fkey" data-key="F3">F3=Exit</span>
-                    <span class="fkey" data-key="F5">F5=Refresh</span>
-                    <span class="fkey" data-key="F12">F12=Cancel</span>
-                    <span class="fkey">Enter=Submit</span>
-                    <span class="fkey">Shift+Enter=Field Exit</span>
-                </div>
             </div>
             <div class="system-busy">
                 <span class="indicator">X</span>

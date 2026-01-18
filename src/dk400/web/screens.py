@@ -29,7 +29,8 @@ def get_celery_app() -> Celery:
 
 def get_system_info() -> tuple[str, str, str]:
     """Get system hostname and current timestamp."""
-    hostname = socket.gethostname().upper()[:12]
+    # Use DK400_SYSTEM_NAME env var, falling back to DK400
+    hostname = os.environ.get('DK400_SYSTEM_NAME', 'DK400').upper()[:12]
     date_str = datetime.now().strftime("%m/%d/%y")
     time_str = datetime.now().strftime("%H:%M:%S")
     return hostname, date_str, time_str
