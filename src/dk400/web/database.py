@@ -224,10 +224,10 @@ CREATE TABLE IF NOT EXISTS qsys._jrn (
 CREATE TABLE IF NOT EXISTS qsys._jrnrcv (
     name VARCHAR(10) NOT NULL,
     library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
-    journal_name VARCHAR(10) NOT NULL,
-    journal_library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    journal_name VARCHAR(10),                   -- NULL when detached
+    journal_library VARCHAR(10),                -- NULL when detached
     text VARCHAR(50) DEFAULT '',
-    status VARCHAR(10) DEFAULT '*ATTACHED',     -- *ATTACHED, *DETACHED, *SAVED
+    status VARCHAR(10) DEFAULT '*DETACHED',     -- *ATTACHED, *DETACHED, *SAVED
     sequence INTEGER DEFAULT 1,                 -- Receiver chain sequence
     first_entry BIGINT,                         -- First entry sequence in receiver
     last_entry BIGINT,                          -- Last entry sequence in receiver
@@ -237,8 +237,7 @@ CREATE TABLE IF NOT EXISTS qsys._jrnrcv (
     detach_time TIMESTAMP,
     created_by VARCHAR(10),
     created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (name, library),
-    FOREIGN KEY (journal_name, journal_library) REFERENCES qsys._jrn(name, library)
+    PRIMARY KEY (name, library)
 );
 
 -- Journal Entries (the actual journal data)
@@ -260,9 +259,7 @@ CREATE TABLE IF NOT EXISTS qsys._jrne (
     relative_record BIGINT,                     -- JOCTRR - RRN if applicable
     before_image JSONB,                         -- Record before change (UB, DL)
     after_image JSONB,                          -- Record after change (PT, UP)
-    commit_cycle_id BIGINT,                     -- JOCCID - For transaction grouping
-    FOREIGN KEY (receiver_name, receiver_library)
-        REFERENCES qsys._jrnrcv(name, library)
+    commit_cycle_id BIGINT                      -- JOCCID - For transaction grouping
 );
 
 -- Index for efficient journal queries
@@ -282,8 +279,7 @@ CREATE TABLE IF NOT EXISTS qsys._jrnpf (
     omit_open_close BOOLEAN DEFAULT TRUE,       -- OMTJRNE(*OPNCLO)
     started_by VARCHAR(10),
     started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (schema_name, table_name),
-    FOREIGN KEY (journal_name, journal_library) REFERENCES qsys._jrn(name, library)
+    PRIMARY KEY (schema_name, table_name)
 );
 
 -- =============================================================================
@@ -5172,9 +5168,9 @@ def create_journal_receiver(name: str, library: str = 'QGPL',
         if not jrn:
             return False, f"Journal {journal_lib}/{journal} not found"
     else:
-        # Receiver must be attached to a journal later
-        journal = ''
-        journal_lib = ''
+        # Receiver must be attached to a journal later - use NULL
+        journal = None
+        journal_lib = None
 
     try:
         with get_cursor() as cursor:
@@ -5192,7 +5188,7 @@ def create_journal_receiver(name: str, library: str = 'QGPL',
                 INSERT INTO qsys._jrnrcv (name, library, journal_name, journal_library,
                                           text, status, sequence, created_by)
                 VALUES (%s, %s, %s, %s, %s, '*DETACHED', %s, %s)
-            """, (name, library, journal or '', journal_lib or '', text, sequence, created_by))
+            """, (name, library, journal, journal_lib, text, sequence, created_by))
 
         return True, f"Journal receiver {library}/{name} created"
     except psycopg2.IntegrityError:
