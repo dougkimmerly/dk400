@@ -9,6 +9,8 @@ from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
 from typing import Optional, Generator
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import logging
 
 logger = logging.getLogger(__name__)
@@ -114,7 +116,9 @@ INSERT INTO system_values (name, value, description, category) VALUES
     ('QLOGOSIZE', '*SMALL', 'Logo display size (*FULL, *SMALL, *NONE)', 'DISPLAY'),
     ('QDATFMT', '*MDY', 'Date format (*MDY, *DMY, *YMD, *ISO)', 'DATETIME'),
     ('QTIMSEP', ':', 'Time separator character', 'DATETIME'),
-    ('QDATSEP', '/', 'Date separator character', 'DATETIME')
+    ('QDATSEP', '/', 'Date separator character', 'DATETIME'),
+    ('QTIMZON', 'America/Toronto', 'System timezone (IANA format)', 'DATETIME'),
+    ('QDSTADJ', '*YES', 'Daylight saving time adjustment (*YES, *NO)', 'DATETIME')
 ON CONFLICT (name) DO NOTHING;
 
 -- =============================================================================
@@ -1667,6 +1671,37 @@ def clear_sysval_cache():
     """Clear the system value cache."""
     global _sysval_cache
     _sysval_cache = {}
+
+
+def get_system_timezone() -> ZoneInfo:
+    """
+    Get the system timezone from QTIMZON system value.
+    Returns ZoneInfo object for timezone-aware datetime operations.
+    Falls back to America/Toronto if timezone is invalid.
+    """
+    tz_name = get_system_value('QTIMZON', 'America/Toronto')
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        logger.warning(f"Invalid timezone {tz_name}, using America/Toronto")
+        return ZoneInfo('America/Toronto')
+
+
+def get_system_datetime() -> datetime:
+    """
+    Get current datetime in system timezone.
+    Uses QTIMZON system value for timezone.
+    """
+    tz = get_system_timezone()
+    return datetime.now(tz)
+
+
+def get_system_timezone_name() -> str:
+    """
+    Get the system timezone name for Celery and other configs.
+    Returns the IANA timezone string.
+    """
+    return get_system_value('QTIMZON', 'America/Toronto')
 
 
 # =============================================================================

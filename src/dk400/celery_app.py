@@ -5,6 +5,27 @@ AS/400-inspired job queue system using Celery + Redis.
 """
 from celery import Celery
 import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def _get_timezone() -> str:
+    """
+    Get timezone from QTIMZON system value.
+    Falls back to environment variable or 'America/Toronto'.
+    """
+    try:
+        from src.dk400.web.database import get_system_timezone_name
+        tz = get_system_timezone_name()
+        logger.info(f"Using QTIMZON timezone: {tz}")
+        return tz
+    except Exception as e:
+        # Database not ready yet, use fallback
+        tz = os.environ.get('DK400_TIMEZONE', 'America/Toronto')
+        logger.info(f"Database not available, using fallback timezone: {tz}")
+        return tz
+
 
 app = Celery('dk400')
 
@@ -14,7 +35,7 @@ app.config_from_object({
     'task_serializer': 'json',
     'result_serializer': 'json',
     'accept_content': ['json'],
-    'timezone': 'America/Toronto',
+    'timezone': _get_timezone(),
     'enable_utc': True,
     'task_track_started': True,
     'task_time_limit': 600,  # 10 minute hard limit

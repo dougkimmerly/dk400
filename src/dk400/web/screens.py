@@ -21,6 +21,7 @@ from src.dk400.web.database import (
     grant_object_authority, revoke_object_authority, get_object_authorities,
     get_effective_authorities, get_user_group, AUTHORITY_GRANTS,
     get_system_value, set_system_value, list_system_values,
+    get_system_datetime, get_system_timezone_name,
     # Message Queues
     create_message_queue, delete_message_queue, list_message_queues,
     send_message, get_messages, mark_message_old, reply_to_message,
@@ -70,14 +71,19 @@ def get_celery_app() -> Celery:
 
 
 def get_system_info() -> tuple[str, str, str]:
-    """Get system name and current timestamp."""
+    """Get system name and current timestamp using system timezone."""
     # Use QSYSNAME system value, with env var as fallback
     try:
         hostname = get_system_value('QSYSNAME', 'DK400').upper()[:12]
     except Exception:
         hostname = os.environ.get('DK400_SYSTEM_NAME', 'DK400').upper()[:12]
-    date_str = datetime.now().strftime("%m/%d/%y")
-    time_str = datetime.now().strftime("%H:%M:%S")
+    # Use system timezone from QTIMZON
+    try:
+        now = get_system_datetime()
+    except Exception:
+        now = datetime.now()
+    date_str = now.strftime("%m/%d/%y")
+    time_str = now.strftime("%H:%M:%S")
     return hostname, date_str, time_str
 
 
