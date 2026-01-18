@@ -56,7 +56,7 @@ from src.dk400.web.database import (
     # Query Definitions (WRKQRY)
     list_query_definitions, create_query_definition, get_query_definition,
     update_query_definition, delete_query_definition, execute_query_definition,
-    run_adhoc_query, list_table_columns, QUERY_OPERATORS,
+    run_adhoc_query, list_table_columns, QUERY_OPERATORS, AGGREGATE_FUNCTIONS,
 )
 
 
@@ -528,7 +528,7 @@ class ScreenManager:
             # Query screens
             elif screen == 'qrydefine':
                 return self.get_screen(session, 'wrkqry')
-            elif screen in ('qryfiles', 'qryfields', 'qrywhere', 'qrysort', 'qryoutput', 'qrylimit'):
+            elif screen in ('qryfiles', 'qryfields', 'qrywhere', 'qrysort', 'qryoutput', 'qrylimit', 'qrysummary', 'qryformat'):
                 return self.get_screen(session, 'qrydefine')
             elif screen == 'qrycond':
                 return self.get_screen(session, 'qrywhere')
@@ -5908,6 +5908,8 @@ class ScreenManager:
                 session.field_values['qry_columns'] = qry_def.get('selected_columns', [])
                 session.field_values['qry_conditions'] = qry_def.get('where_conditions', [])
                 session.field_values['qry_orderby'] = qry_def.get('order_by_fields', [])
+                session.field_values['qry_summary'] = qry_def.get('summary_functions', [])
+                session.field_values['qry_groupby'] = qry_def.get('group_by_fields', [])
                 session.field_values['qry_output'] = qry_def.get('output_type', '*DISPLAY')
                 session.field_values['qry_limit'] = qry_def.get('row_limit', 0)
                 return self.get_screen(session, 'qrydefine')
@@ -5950,6 +5952,8 @@ class ScreenManager:
 
         qry_output = session.field_values.get('qry_output', '*DISPLAY')
         qry_limit = session.field_values.get('qry_limit', 0)
+        qry_summary = session.field_values.get('qry_summary', [])
+        qry_groupby = session.field_values.get('qry_groupby', [])
 
         # Format status indicators
         file_status = f"{qry_schema}.{qry_table}" if qry_schema and qry_table else "(not selected)"
@@ -5961,6 +5965,16 @@ class ScreenManager:
         sort_status = f"{sort_count} field(s)" if sort_count else "(none)"
         output_status = qry_output
         limit_status = str(qry_limit) if qry_limit else "(all rows)"
+        # Summary functions status
+        summary_count = len(qry_summary) if qry_summary else 0
+        groupby_count = len(qry_groupby) if qry_groupby else 0
+        if summary_count > 0:
+            summary_status = f"{summary_count} func, {groupby_count} group"
+        else:
+            summary_status = "(none)"
+        # Column formatting status (count columns with aliases)
+        alias_count = sum(1 for c in qry_columns if c.get('alias', '').strip()) if qry_columns else 0
+        format_status = f"{alias_count} with headers" if alias_count > 0 else "(default)"
 
         title = "Define Query" if mode == 'create' else f"Change Query - {qry_name}"
 
@@ -6018,9 +6032,17 @@ class ScreenManager:
             {"type": "text", "text": "     "},
             {"type": "text", "text": f"6. Specify row limit . . . . . . . .  {limit_status}"},
         ])
+        content.append([
+            {"type": "text", "text": "     "},
+            {"type": "text", "text": f"7. Select summary functions  . . . .  {summary_status}"},
+        ])
+        content.append([
+            {"type": "text", "text": "     "},
+            {"type": "text", "text": f"8. Define column formatting  . . . .  {format_status}"},
+        ])
 
         # Pad to consistent height
-        while len(content) < 19:
+        while len(content) < 21:
             content.append(pad_line(""))
 
         # Message line
@@ -6100,6 +6122,20 @@ class ScreenManager:
         elif option == '6':
             # Row limit
             return self.get_screen(session, 'qrylimit')
+        elif option == '7':
+            # Summary functions - must have columns selected first
+            if not session.field_values.get('qry_schema') or not session.field_values.get('qry_table'):
+                session.message = "Select file first (option 1)"
+                session.message_level = "error"
+                return self.get_screen(session, 'qrydefine')
+            return self.get_screen(session, 'qrysummary')
+        elif option == '8':
+            # Column formatting - must have columns selected first
+            if not session.field_values.get('qry_columns'):
+                session.message = "Select fields first (option 2)"
+                session.message_level = "error"
+                return self.get_screen(session, 'qrydefine')
+            return self.get_screen(session, 'qryformat')
         elif option:
             session.message = f"Option {option} not valid"
             session.message_level = "error"
@@ -6148,6 +6184,8 @@ class ScreenManager:
                     selected_columns=session.field_values.get('qry_columns', []),
                     where_conditions=session.field_values.get('qry_conditions', []),
                     order_by_fields=session.field_values.get('qry_orderby', []),
+                    summary_functions=session.field_values.get('qry_summary', []),
+                    group_by_fields=session.field_values.get('qry_groupby', []),
                     output_type=session.field_values.get('qry_output', '*DISPLAY'),
                     row_limit=session.field_values.get('qry_limit', 0),
                     created_by=session.user,
@@ -6163,6 +6201,8 @@ class ScreenManager:
                     selected_columns=session.field_values.get('qry_columns', []),
                     where_conditions=session.field_values.get('qry_conditions', []),
                     order_by_fields=session.field_values.get('qry_orderby', []),
+                    summary_functions=session.field_values.get('qry_summary', []),
+                    group_by_fields=session.field_values.get('qry_groupby', []),
                     output_type=session.field_values.get('qry_output', '*DISPLAY'),
                     row_limit=session.field_values.get('qry_limit', 0),
                     updated_by=session.user,
@@ -6917,6 +6957,8 @@ class ScreenManager:
             qry_columns = session.field_values.get('qry_columns', [])
             qry_conditions = session.field_values.get('qry_conditions', [])
             qry_orderby = session.field_values.get('qry_orderby', [])
+            qry_summary = session.field_values.get('qry_summary', [])
+            qry_groupby = session.field_values.get('qry_groupby', [])
 
             if not qry_schema or not qry_table:
                 session.message = "No query defined"
@@ -6926,6 +6968,8 @@ class ScreenManager:
 
             success, result, columns = run_adhoc_query(
                 qry_schema, qry_table, qry_columns, qry_conditions, qry_orderby,
+                summary_functions=qry_summary,
+                group_by_fields=qry_groupby,
                 limit=page_size + 1,
                 offset=offset
             )
@@ -7420,3 +7464,272 @@ class ScreenManager:
             session.message = "Invalid number. Enter 0 or a positive integer."
             session.message_level = "error"
             return self.get_screen(session, 'qrylimit')
+
+    def _screen_qrysummary(self, session: Session) -> dict:
+        """Select Summary Functions screen - define aggregates and GROUP BY."""
+        hostname, date_str, time_str = get_system_info()
+
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+        qry_columns = session.field_values.get('qry_columns', [])
+        qry_summary = session.field_values.get('qry_summary', [])
+        qry_groupby = session.field_values.get('qry_groupby', [])
+
+        # Get columns - either selected columns or all table columns
+        if qry_columns:
+            columns = qry_columns
+        else:
+            columns = list_table_columns(qry_schema, qry_table) if qry_schema and qry_table else []
+
+        offset = session.get_offset('qrysummary')
+        page_size = 10
+
+        # Build lookup for current settings
+        summary_map = {s['column']: s['function'] for s in qry_summary}
+        groupby_set = set(qry_groupby)
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       Select Summary Functions                 {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type function code and/or 1 for GROUP BY. Press Enter."))
+        content.append(pad_line(" Functions: COUNT, SUM, AVG, MIN, MAX (or blank for none)"))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append([{"type": "text", "text": pad_line(" Function   Column Name                    GroupBy"), "class": "field-reverse"}])
+
+        # Column list with function and groupby fields
+        fields = []
+        page_columns = columns[offset:offset + page_size]
+
+        for i, col in enumerate(page_columns):
+            col_name = col['name'] if isinstance(col, dict) else col
+            func_id = f"func_{i}"
+            grp_id = f"grp_{i}"
+            fields.append({"id": func_id})
+            fields.append({"id": grp_id})
+
+            # Get current values
+            current_func = summary_map.get(col_name, '')
+            current_grp = '1' if col_name in groupby_set else ''
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": func_id, "width": 5, "value": current_func, "class": "field-input"},
+                {"type": "text", "text": f"      {col_name:<28} "},
+                {"type": "input", "id": grp_id, "width": 1, "value": current_grp, "class": "field-input"},
+            ])
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_columns)):
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        total = len(columns)
+        if total == 0:
+            indicator = "No columns"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F12=Cancel    (blank = no summary)"))
+
+        return {
+            "type": "screen",
+            "screen": "qrysummary",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qrysummary(self, session: Session, fields: dict) -> dict:
+        """Handle summary functions submission."""
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+        qry_columns = session.field_values.get('qry_columns', [])
+
+        # Get columns
+        if qry_columns:
+            columns = qry_columns
+        else:
+            columns = list_table_columns(qry_schema, qry_table) if qry_schema and qry_table else []
+
+        offset = session.get_offset('qrysummary')
+        page_size = 10
+        page_columns = columns[offset:offset + page_size]
+
+        # Get current settings
+        qry_summary = session.field_values.get('qry_summary', [])
+        qry_groupby = session.field_values.get('qry_groupby', [])
+
+        # Convert to dicts for easier manipulation
+        summary_map = {s['column']: s['function'] for s in qry_summary}
+        groupby_set = set(qry_groupby)
+
+        # Valid aggregate functions
+        valid_funcs = {'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', ''}
+
+        # Process this page's entries
+        for i, col in enumerate(page_columns):
+            col_name = col['name'] if isinstance(col, dict) else col
+            func = fields.get(f'func_{i}', '').strip().upper()
+            grp = fields.get(f'grp_{i}', '').strip()
+
+            # Validate function
+            if func and func not in valid_funcs:
+                session.message = f"Invalid function '{func}'. Use COUNT, SUM, AVG, MIN, MAX or blank."
+                session.message_level = "error"
+                return self.get_screen(session, 'qrysummary')
+
+            # Update summary function
+            if func:
+                summary_map[col_name] = func
+            elif col_name in summary_map:
+                del summary_map[col_name]
+
+            # Update group by
+            if grp == '1':
+                groupby_set.add(col_name)
+            elif col_name in groupby_set:
+                groupby_set.discard(col_name)
+
+        # Convert back to list format
+        qry_summary = [{'column': k, 'function': v} for k, v in summary_map.items()]
+        qry_groupby = list(groupby_set)
+
+        # Save to session
+        session.field_values['qry_summary'] = qry_summary
+        session.field_values['qry_groupby'] = qry_groupby
+
+        summary_count = len(qry_summary)
+        groupby_count = len(qry_groupby)
+
+        if summary_count > 0 or groupby_count > 0:
+            session.message = f"{summary_count} summary function(s), {groupby_count} group by field(s)"
+        else:
+            session.message = "Summary functions cleared"
+        session.message_level = "info"
+
+        return self.get_screen(session, 'qrydefine')
+
+    def _screen_qryformat(self, session: Session) -> dict:
+        """Define Column Formatting screen - set column headers/aliases."""
+        hostname, date_str, time_str = get_system_info()
+
+        qry_columns = session.field_values.get('qry_columns', [])
+
+        offset = session.get_offset('qryformat')
+        page_size = 10
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       Define Column Formatting                 {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type column header text. Press Enter to save."))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append([{"type": "text", "text": pad_line(" Column Name                    Header/Alias"), "class": "field-reverse"}])
+
+        # Column list with alias input
+        fields = []
+        page_columns = qry_columns[offset:offset + page_size]
+
+        for i, col in enumerate(page_columns):
+            col_name = col.get('name', '')
+            col_alias = col.get('alias', '')
+            alias_id = f"alias_{i}"
+            fields.append({"id": alias_id})
+
+            content.append([
+                {"type": "text", "text": f" {col_name:<28}   "},
+                {"type": "input", "id": alias_id, "width": 30, "value": col_alias, "class": "field-input"},
+            ])
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_columns)):
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        total = len(qry_columns)
+        if total == 0:
+            indicator = "No columns selected"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F12=Cancel    (blank = use column name)"))
+
+        return {
+            "type": "screen",
+            "screen": "qryformat",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qryformat(self, session: Session, fields: dict) -> dict:
+        """Handle column formatting submission."""
+        qry_columns = session.field_values.get('qry_columns', [])
+
+        offset = session.get_offset('qryformat')
+        page_size = 10
+        page_columns = qry_columns[offset:offset + page_size]
+
+        # Update aliases for this page's columns
+        for i, col in enumerate(page_columns):
+            alias = fields.get(f'alias_{i}', '').strip()
+            # Find and update the column in the full list
+            col_name = col.get('name', '')
+            for c in qry_columns:
+                if c.get('name') == col_name:
+                    c['alias'] = alias
+                    break
+
+        # Save back to session
+        session.field_values['qry_columns'] = qry_columns
+
+        # Count columns with aliases
+        alias_count = sum(1 for c in qry_columns if c.get('alias', '').strip())
+        if alias_count > 0:
+            session.message = f"{alias_count} column(s) with custom headers"
+        else:
+            session.message = "Column formatting cleared"
+        session.message_level = "info"
+
+        return self.get_screen(session, 'qrydefine')

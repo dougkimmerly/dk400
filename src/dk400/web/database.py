@@ -382,9 +382,11 @@ CREATE TABLE IF NOT EXISTS query_definitions (
     description VARCHAR(50) DEFAULT '',
     source_schema VARCHAR(128),
     source_table VARCHAR(128),
-    selected_columns JSONB DEFAULT '[]',       -- [{name, alias, seq}]
+    selected_columns JSONB DEFAULT '[]',       -- [{name, alias, seq, function}]
     where_conditions JSONB DEFAULT '[]',       -- [{field, op, value, and_or}]
     order_by_fields JSONB DEFAULT '[]',        -- [{field, dir, seq}]
+    summary_functions JSONB DEFAULT '[]',      -- [{column, function}] - COUNT, SUM, AVG, MIN, MAX
+    group_by_fields JSONB DEFAULT '[]',        -- [field_name, ...] - GROUP BY columns
     output_type VARCHAR(10) DEFAULT '*DISPLAY', -- *DISPLAY, *OUTFILE, *PRINT
     row_limit INTEGER DEFAULT 0,               -- 0 = no limit
     created_by VARCHAR(10),
@@ -3356,6 +3358,16 @@ QUERY_OPERATORS = {
     'NN': ('IS NOT NULL', 'Not Null'),
 }
 
+# Aggregate functions for summary queries (Query/400 style)
+AGGREGATE_FUNCTIONS = {
+    '': ('', 'None'),                 # No aggregate
+    'COUNT': ('COUNT', 'Count'),
+    'SUM': ('SUM', 'Sum'),
+    'AVG': ('AVG', 'Average'),
+    'MIN': ('MIN', 'Minimum'),
+    'MAX': ('MAX', 'Maximum'),
+}
+
 
 def list_table_columns(schema_name: str, table_name: str) -> list[dict]:
     """
@@ -3406,6 +3418,8 @@ def create_query_definition(
     selected_columns: list = None,
     where_conditions: list = None,
     order_by_fields: list = None,
+    summary_functions: list = None,
+    group_by_fields: list = None,
     output_type: str = '*DISPLAY',
     row_limit: int = 0,
     created_by: str = 'SYSTEM'
@@ -3425,8 +3439,9 @@ def create_query_definition(
                 INSERT INTO query_definitions (
                     name, library, description, source_schema, source_table,
                     selected_columns, where_conditions, order_by_fields,
+                    summary_functions, group_by_fields,
                     output_type, row_limit, created_by
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 name, library, description,
                 source_schema.lower() if source_schema else None,
@@ -3434,6 +3449,8 @@ def create_query_definition(
                 json.dumps(selected_columns or []),
                 json.dumps(where_conditions or []),
                 json.dumps(order_by_fields or []),
+                json.dumps(summary_functions or []),
+                json.dumps(group_by_fields or []),
                 output_type, row_limit, created_by
             ))
 
@@ -3467,6 +3484,8 @@ def get_query_definition(name: str, library: str = 'QGPL') -> dict | None:
                     'selected_columns': row['selected_columns'] or [],
                     'where_conditions': row['where_conditions'] or [],
                     'order_by_fields': row['order_by_fields'] or [],
+                    'summary_functions': row['summary_functions'] or [],
+                    'group_by_fields': row['group_by_fields'] or [],
                     'output_type': row['output_type'],
                     'row_limit': row['row_limit'],
                     'created_by': row['created_by'],
@@ -3500,8 +3519,13 @@ def update_query_definition(
     allowed_fields = [
         'description', 'source_schema', 'source_table',
         'selected_columns', 'where_conditions', 'order_by_fields',
+        'summary_functions', 'group_by_fields',
         'output_type', 'row_limit'
     ]
+
+    # Fields that need JSON serialization
+    json_fields = ('selected_columns', 'where_conditions', 'order_by_fields',
+                   'summary_functions', 'group_by_fields')
 
     updates = []
     values = []
@@ -3509,7 +3533,7 @@ def update_query_definition(
     for field in allowed_fields:
         if field in kwargs:
             val = kwargs[field]
-            if field in ('selected_columns', 'where_conditions', 'order_by_fields'):
+            if field in json_fields:
                 val = json.dumps(val or [])
             elif field in ('source_schema', 'source_table') and val:
                 val = val.lower()
@@ -3603,12 +3627,21 @@ def build_query_sql(
     columns: list = None,
     conditions: list = None,
     order_by: list = None,
+    summary_functions: list = None,
+    group_by_fields: list = None,
     limit: int = 100,
     offset: int = 0
 ) -> tuple:
     """
     Build a parameterized SQL query from query definition components.
     Uses psycopg2.sql module for safe identifier handling.
+
+    Supports:
+    - Column selection with aliases
+    - Aggregate functions (COUNT, SUM, AVG, MIN, MAX)
+    - GROUP BY clause
+    - WHERE conditions
+    - ORDER BY clause
 
     Returns: (sql_composed_object, params_list)
     """
@@ -3620,11 +3653,50 @@ def build_query_sql(
         psql.Identifier(table.lower())
     )
 
-    # Build column list
+    # Build summary function lookup: column_name -> function
+    summary_map = {}
+    if summary_functions:
+        for sf in summary_functions:
+            col = sf.get('column', '').lower()
+            func = sf.get('function', '').upper()
+            if col and func and func in AGGREGATE_FUNCTIONS:
+                summary_map[col] = func
+
+    # Build column list with aggregates and aliases
     if columns and len(columns) > 0:
-        col_list = psql.SQL(", ").join([
-            psql.Identifier(c['name'].lower()) for c in sorted(columns, key=lambda x: x.get('seq', 0))
-        ])
+        col_parts = []
+        for c in sorted(columns, key=lambda x: x.get('seq', 0)):
+            col_name = c['name'].lower()
+            alias = c.get('alias', '').strip()
+            func = c.get('function', '').upper() or summary_map.get(col_name, '')
+
+            if func and func in AGGREGATE_FUNCTIONS and func != '':
+                # Apply aggregate function
+                if alias:
+                    col_expr = psql.SQL("{}({}) AS {}").format(
+                        psql.SQL(func),
+                        psql.Identifier(col_name),
+                        psql.Identifier(alias)
+                    )
+                else:
+                    # Auto-alias: e.g., SUM(amount) AS sum_amount
+                    auto_alias = f"{func.lower()}_{col_name}"
+                    col_expr = psql.SQL("{}({}) AS {}").format(
+                        psql.SQL(func),
+                        psql.Identifier(col_name),
+                        psql.Identifier(auto_alias)
+                    )
+            elif alias:
+                # Column with alias, no aggregate
+                col_expr = psql.SQL("{} AS {}").format(
+                    psql.Identifier(col_name),
+                    psql.Identifier(alias)
+                )
+            else:
+                # Plain column
+                col_expr = psql.Identifier(col_name)
+            col_parts.append(col_expr)
+        col_list = psql.SQL(", ").join(col_parts)
     else:
         col_list = psql.SQL("*")
 
@@ -3670,6 +3742,11 @@ def build_query_sql(
                     connector = 'AND'
                 where_sql = where_sql + psql.SQL(" {} ").format(psql.SQL(connector)) + where_parts[i]
             query = query + psql.SQL(" WHERE ") + where_sql
+
+    # Build GROUP BY clause (required when using aggregate functions)
+    if group_by_fields and len(group_by_fields) > 0:
+        group_parts = [psql.Identifier(f.lower()) for f in group_by_fields]
+        query = query + psql.SQL(" GROUP BY ") + psql.SQL(", ").join(group_parts)
 
     # Build ORDER BY clause
     if order_by and len(order_by) > 0:
@@ -3717,6 +3794,8 @@ def execute_query_definition(
             columns=qry['selected_columns'],
             conditions=qry['where_conditions'],
             order_by=qry['order_by_fields'],
+            summary_functions=qry.get('summary_functions'),
+            group_by_fields=qry.get('group_by_fields'),
             limit=qry['row_limit'] if qry['row_limit'] > 0 else limit,
             offset=offset
         )
@@ -3748,6 +3827,8 @@ def run_adhoc_query(
     columns: list = None,
     conditions: list = None,
     order_by: list = None,
+    summary_functions: list = None,
+    group_by_fields: list = None,
     limit: int = 100,
     offset: int = 0
 ) -> tuple[bool, list | str, list]:
@@ -3767,6 +3848,8 @@ def run_adhoc_query(
             columns=columns,
             conditions=conditions,
             order_by=order_by,
+            summary_functions=summary_functions,
+            group_by_fields=group_by_fields,
             limit=limit,
             offset=offset
         )
