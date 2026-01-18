@@ -47,6 +47,8 @@ from src.dk400.web.database import (
     get_subsystem_description, list_subsystem_descriptions,
     start_subsystem, end_subsystem, add_job_queue_entry,
     remove_job_queue_entry, get_subsystem_job_queues,
+    # Commands
+    list_commands, get_command, get_command_parameters, get_parameter_valid_values,
 )
 
 
@@ -258,6 +260,44 @@ class ScreenManager:
         'GO': 'Go to Main Menu',
     }
 
+    # Map screen names back to command names for F4 parameter prompts
+    # Used to look up parameters when F4 is pressed on a field
+    SCREEN_COMMAND_MAP = {
+        'user_create': 'CRTUSRPRF',
+        'sbmjob': 'SBMJOB',
+        'sndmsg': 'SNDMSG',
+        'crtdtaara': 'CRTDTAARA',
+        'chgdtaara': 'CHGDTAARA',
+        'chgsysval': 'CHGSYSVAL',
+        'grtobjaut': 'GRTOBJAUT',
+        'rvkobjaut': 'RVKOBJAUT',
+        'addjobscde': 'ADDJOBSCDE',
+        'crtjobd': 'CRTJOBD',
+        'crtautl': 'CRTAUTL',
+        'schema_create': 'CRTSCHEMA',
+    }
+
+    # Map field IDs to parameter names for F4 prompts
+    # If field ID matches parameter name (uppercase), no mapping needed
+    FIELD_PARM_MAP = {
+        # user_create screen
+        'usrcls': 'USRCLS',
+        'grpprf': 'GRPPRF',
+        'password': 'PASSWORD',
+        # sbmjob screen
+        'jobq': 'JOBQ',
+        'jobd': 'JOBD',
+        # crtdtaara screen
+        'type': 'TYPE',
+        # grtobjaut screen
+        'objtype': 'OBJTYPE',
+        'aut': 'AUT',
+        # addjobscde screen
+        'frq': 'FRQ',
+        'scdday': 'SCDDAY',
+        'scddate': 'SCDDATE',
+    }
+
     def get_screen(self, session: Session, screen_name: str) -> dict:
         """Get screen data for rendering."""
         session.current_screen = screen_name
@@ -290,9 +330,33 @@ class ScreenManager:
                 return self.get_screen(session, 'main')
         elif key == 'F4':
             # F4 = Prompt - show command list or parameter help
-            # Store current screen to return to after command selection
             session.field_values['f4_return_screen'] = screen
-            # Get command from current input field if any
+
+            # Check if we have a focused field that has parameter prompts
+            active_field = fields.get('_active_field', '').lower()
+
+            # If on command line or no active field, show command list
+            if not active_field or active_field == 'cmd':
+                cmd_input = fields.get('cmd', '').strip().upper()
+                session.field_values['f4_filter'] = cmd_input
+                return self.get_screen(session, 'cmdlist')
+
+            # Check if this screen has a command mapping
+            command_name = self.SCREEN_COMMAND_MAP.get(screen)
+            if command_name:
+                # Map field ID to parameter name
+                parm_name = self.FIELD_PARM_MAP.get(active_field, active_field.upper())
+
+                # Check if valid values exist for this parameter
+                valid_values = get_parameter_valid_values(command_name, parm_name)
+                if valid_values:
+                    # Show parameter value prompt
+                    session.field_values['f4_command'] = command_name
+                    session.field_values['f4_parm'] = parm_name
+                    session.field_values['f4_field_id'] = active_field
+                    return self.get_screen(session, 'parmlist')
+
+            # No parameter prompts available, show command list
             cmd_input = fields.get('cmd', '').strip().upper()
             session.field_values['f4_filter'] = cmd_input
             return self.get_screen(session, 'cmdlist')
@@ -406,6 +470,15 @@ class ScreenManager:
                 session.field_values.pop('f4_filter', None)
                 session.field_values.pop('f4_return_screen', None)
                 return self.get_screen(session, return_screen)
+            # Parameter list (F4 prompt for field values)
+            elif screen == 'parmlist':
+                return_screen = session.field_values.get('f4_return_screen', 'main')
+                session.field_values.pop('f4_command', None)
+                session.field_values.pop('f4_parm', None)
+                session.field_values.pop('f4_field_id', None)
+                session.field_values.pop('f4_return_screen', None)
+                session.set_offset('parmlist', 0)
+                return self.get_screen(session, return_screen)
             return self.get_screen(session, 'main')
 
         return self.get_screen(session, screen)
@@ -424,6 +497,7 @@ class ScreenManager:
         'wrkschema': 10,
         'dspobjaut': 10,
         'cmdlist': 12,
+        'parmlist': 10,
     }
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
@@ -440,16 +514,27 @@ class ScreenManager:
 
     def execute_command(self, session: Session, command: str) -> dict:
         """Execute an AS/400 command."""
+        command = command.upper().strip()
+
+        # Check numeric shortcuts first (from COMMANDS dict)
         if command in self.COMMANDS:
             session.message = ""
             return self.get_screen(session, self.COMMANDS[command])
 
-        matches = [c for c in self.COMMANDS.keys() if c.startswith(command) and not c.isdigit()]
+        # Look up command in database
+        cmd_def = get_command(command)
+        if cmd_def and cmd_def.get('screen_name'):
+            session.message = ""
+            return self.get_screen(session, cmd_def['screen_name'])
+
+        # Try partial match from database
+        matches = list_commands(command)
         if len(matches) == 1:
             session.message = ""
-            return self.get_screen(session, self.COMMANDS[matches[0]])
+            return self.get_screen(session, matches[0]['screen_name'])
         elif len(matches) > 1:
-            session.message = f"Ambiguous command: {', '.join(matches)}"
+            cmd_names = [m['command_name'] for m in matches[:5]]
+            session.message = f"Ambiguous command: {', '.join(cmd_names)}"
             return self.get_screen(session, session.current_screen)
 
         session.message = f"Command {command} not found"
@@ -613,25 +698,20 @@ class ScreenManager:
         }
 
     def _screen_cmdlist(self, session: Session) -> dict:
-        """Command List (F4 Prompt) - show all available commands."""
+        """Command List (F4 Prompt) - show all available commands from COMMAND_INFO."""
         hostname, date_str, time_str = get_system_info()
 
         # Get filter from F4 context
         cmd_filter = session.field_values.get('f4_filter', '').upper()
 
-        # Build list of commands (exclude numeric shortcuts)
-        commands = []
-        for cmd, screen in self.COMMANDS.items():
-            if cmd.isdigit():
-                continue
-            desc = self.COMMAND_DESCRIPTIONS.get(cmd, '')
-            # Apply filter if present
-            if cmd_filter and not cmd.startswith(cmd_filter):
-                continue
-            commands.append((cmd, desc))
+        # Query commands from database (already filtered and sorted)
+        db_commands = list_commands(cmd_filter)
 
-        # Sort by command name
-        commands.sort(key=lambda x: x[0])
+        # Convert to tuple format for display
+        commands = [
+            (c['command_name'], c.get('text_description', ''))
+            for c in db_commands
+        ]
 
         # Pagination
         page_size = 12
@@ -714,29 +794,131 @@ class ScreenManager:
             session.set_offset('cmdlist', 0)
             return self.get_screen(session, 'cmdlist')
 
-        # Get current page of commands
+        # Get current page of commands from database
         cmd_filter = session.field_values.get('f4_filter', '').upper()
-        commands = []
-        for cmd, screen in self.COMMANDS.items():
-            if cmd.isdigit():
-                continue
-            if cmd_filter and not cmd.startswith(cmd_filter):
-                continue
-            commands.append((cmd, self.COMMANDS[cmd]))
-        commands.sort(key=lambda x: x[0])
+        db_commands = list_commands(cmd_filter)
 
         page_size = 12
         offset = session.get_offset('cmdlist')
-        page_commands = commands[offset:offset + page_size]
+        page_commands = db_commands[offset:offset + page_size]
 
         # Check for option selection
-        for i, (cmd, screen) in enumerate(page_commands):
+        for i, cmd_row in enumerate(page_commands):
             opt = fields.get(f'opt_{i}', '').strip()
             if opt == '1':
                 # Execute the selected command
-                return self.execute_command(session, cmd)
+                return self.execute_command(session, cmd_row['command_name'])
 
         return self.get_screen(session, 'cmdlist')
+
+    def _screen_parmlist(self, session: Session) -> dict:
+        """Parameter Valid Values (F4 Prompt) - show valid values from PARM_VALID_VALUES."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Get context from F4 press
+        command_name = session.field_values.get('f4_command', '')
+        parm_name = session.field_values.get('f4_parm', '')
+        field_id = session.field_values.get('f4_field_id', '')
+
+        # Query valid values from database
+        valid_values = get_parameter_valid_values(command_name, parm_name)
+
+        # Pagination
+        page_size = 10
+        offset = session.get_offset('parmlist')
+        total = len(valid_values)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('parmlist', offset)
+
+        page_values = valid_values[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            if offset + page_size >= total:
+                pos_indicator = "Bottom"
+            elif offset == 0:
+                pos_indicator = "More..."
+            else:
+                pos_indicator = "More..."
+        else:
+            pos_indicator = "Bottom"
+
+        content = [
+            pad_line(f" {hostname:<20}     Select Parameter Value                    {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Command . . : {command_name:<10}  Parameter . . : {parm_name}"),
+            pad_line(""),
+            pad_line(" Type option, press Enter to select value."),
+            pad_line("   1=Select"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Value           Description"), "class": "field-reverse"}],
+        ]
+
+        fields = []
+        for i, val in enumerate(page_values):
+            value = val.get('valid_value', '')
+            desc = val.get('text_description', '')
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {value:<14}  {desc[:45]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        # Pad to consistent height
+        while len(content) < 19:
+            content.append(pad_line(""))
+
+        content.append(pad_line(f"                                                           {pos_indicator:>10}"))
+
+        # Message area
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "parmlist",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_parmlist(self, session: Session, fields: dict) -> dict:
+        """Handle parameter list submission."""
+        command_name = session.field_values.get('f4_command', '')
+        parm_name = session.field_values.get('f4_parm', '')
+        field_id = session.field_values.get('f4_field_id', '')
+        return_screen = session.field_values.get('f4_return_screen', 'main')
+
+        # Query valid values from database
+        valid_values = get_parameter_valid_values(command_name, parm_name)
+
+        page_size = 10
+        offset = session.get_offset('parmlist')
+        page_values = valid_values[offset:offset + page_size]
+
+        # Check for option selection
+        for i, val in enumerate(page_values):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '1':
+                # Store selected value to be used by the return screen
+                selected_value = val.get('valid_value', '')
+                session.field_values[f'f4_selected_{field_id}'] = selected_value
+                # Clear F4 context
+                session.field_values.pop('f4_command', None)
+                session.field_values.pop('f4_parm', None)
+                session.field_values.pop('f4_field_id', None)
+                session.set_offset('parmlist', 0)
+                return self.get_screen(session, return_screen)
+
+        return self.get_screen(session, 'parmlist')
 
     def _screen_wrkactjob(self, session: Session) -> dict:
         """Work with Active Jobs - 80 columns."""

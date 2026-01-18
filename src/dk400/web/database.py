@@ -367,6 +367,60 @@ INSERT INTO subsystem_job_queues (subsystem_name, job_queue, sequence, max_activ
     ('QINTER', 'QINTER', 10, 10),
     ('QSPL', 'QSPL', 10, 2)
 ON CONFLICT (subsystem_name, job_queue) DO NOTHING;
+
+-- =============================================================================
+-- Commands (AS/400 *CMD objects)
+-- Naming follows QSYS2.COMMAND_INFO pattern from IBM i
+-- =============================================================================
+
+-- Command definitions (matches QSYS2.COMMAND_INFO structure)
+CREATE TABLE IF NOT EXISTS COMMAND_INFO (
+    COMMAND_NAME VARCHAR(10) PRIMARY KEY,
+    COMMAND_LIBRARY VARCHAR(10) DEFAULT 'QSYS',
+    TEXT_DESCRIPTION VARCHAR(50) DEFAULT '',
+    SCREEN_NAME VARCHAR(30),                    -- DK/400 extension: screen to display
+    PROCESSING_PROGRAM VARCHAR(100),            -- Python module/function (future)
+    ALLOW_RUN_INTERACTIVE VARCHAR(3) DEFAULT 'YES',
+    ALLOW_RUN_BATCH VARCHAR(3) DEFAULT 'YES',
+    THREADSAFE VARCHAR(5) DEFAULT '*NO',
+    CREATED TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CREATED_BY VARCHAR(10) DEFAULT 'SYSTEM'
+);
+
+-- Command parameters (DK/400 extension - no AS/400 SQL equivalent)
+-- Column naming follows QSYS2.SYSPARMS pattern where applicable
+CREATE TABLE IF NOT EXISTS COMMAND_PARM_INFO (
+    COMMAND_NAME VARCHAR(10) NOT NULL REFERENCES COMMAND_INFO(COMMAND_NAME) ON DELETE CASCADE,
+    PARM_NAME VARCHAR(10) NOT NULL,             -- Keyword (USER, USRCLS, etc.)
+    ORDINAL_POSITION INTEGER NOT NULL,          -- Parameter order (matches SYSPARMS)
+    DATA_TYPE VARCHAR(10) DEFAULT '*CHAR',      -- *CHAR, *DEC, *NAME, *CMD, *LGL
+    LENGTH INTEGER DEFAULT 10,
+    DECIMAL_POSITIONS INTEGER DEFAULT 0,
+    DEFAULT_VALUE VARCHAR(100),
+    PROMPT_TEXT VARCHAR(40) NOT NULL,           -- F4 prompt label
+    IS_REQUIRED VARCHAR(3) DEFAULT 'NO',        -- YES/NO (AS/400 style)
+    MIN_VALUE VARCHAR(50),                      -- For numeric validation
+    MAX_VALUE VARCHAR(50),                      -- For numeric validation
+    PRIMARY KEY (COMMAND_NAME, PARM_NAME)
+);
+
+-- Index for parameter ordering
+CREATE INDEX IF NOT EXISTS idx_cmd_parm_ord ON COMMAND_PARM_INFO(COMMAND_NAME, ORDINAL_POSITION);
+
+-- Valid values for parameters (DK/400 extension for F4 prompts)
+CREATE TABLE IF NOT EXISTS PARM_VALID_VALUES (
+    COMMAND_NAME VARCHAR(10) NOT NULL,
+    PARM_NAME VARCHAR(10) NOT NULL,
+    VALID_VALUE VARCHAR(50) NOT NULL,
+    TEXT_DESCRIPTION VARCHAR(50) DEFAULT '',
+    ORDINAL_POSITION INTEGER DEFAULT 0,         -- Display order
+    PRIMARY KEY (COMMAND_NAME, PARM_NAME, VALID_VALUE),
+    FOREIGN KEY (COMMAND_NAME, PARM_NAME)
+        REFERENCES COMMAND_PARM_INFO(COMMAND_NAME, PARM_NAME) ON DELETE CASCADE
+);
+
+-- Index for value lookups
+CREATE INDEX IF NOT EXISTS idx_parm_val_ord ON PARM_VALID_VALUES(COMMAND_NAME, PARM_NAME, ORDINAL_POSITION);
 """
 
 
@@ -398,6 +452,8 @@ def init_database() -> bool:
         with get_cursor(dict_cursor=False) as cursor:
             cursor.execute(SCHEMA_SQL)
         logger.info("Database schema initialized successfully")
+        # Populate default commands after schema creation
+        populate_default_commands()
         return True
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
@@ -2820,3 +2876,401 @@ def get_subsystem_job_queues(subsystem_name: str) -> list[dict]:
     except Exception as e:
         logger.error(f"Failed to get subsystem job queues: {e}")
     return queues
+
+
+# =============================================================================
+# Command Functions (AS/400 *CMD)
+# Uses QSYS2.COMMAND_INFO naming convention
+# =============================================================================
+
+def list_commands(filter_prefix: str = '') -> list[dict]:
+    """List all commands, optionally filtered by prefix."""
+    commands = []
+    filter_prefix = filter_prefix.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            if filter_prefix:
+                cursor.execute("""
+                    SELECT COMMAND_NAME, COMMAND_LIBRARY, TEXT_DESCRIPTION, SCREEN_NAME
+                    FROM COMMAND_INFO
+                    WHERE COMMAND_NAME LIKE %s
+                    ORDER BY COMMAND_NAME
+                """, (f"{filter_prefix}%",))
+            else:
+                cursor.execute("""
+                    SELECT COMMAND_NAME, COMMAND_LIBRARY, TEXT_DESCRIPTION, SCREEN_NAME
+                    FROM COMMAND_INFO
+                    ORDER BY COMMAND_NAME
+                """)
+            for row in cursor.fetchall():
+                commands.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to list commands: {e}")
+    return commands
+
+
+def get_command(command_name: str) -> Optional[dict]:
+    """Get a command definition."""
+    command_name = command_name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM COMMAND_INFO WHERE COMMAND_NAME = %s
+            """, (command_name,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.error(f"Failed to get command {command_name}: {e}")
+    return None
+
+
+def get_command_parameters(command_name: str) -> list[dict]:
+    """Get parameters for a command."""
+    command_name = command_name.upper().strip()
+    params = []
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM COMMAND_PARM_INFO
+                WHERE COMMAND_NAME = %s
+                ORDER BY ORDINAL_POSITION
+            """, (command_name,))
+            for row in cursor.fetchall():
+                params.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to get parameters for {command_name}: {e}")
+    return params
+
+
+def get_parameter_valid_values(command_name: str, parm_name: str) -> list[dict]:
+    """Get valid values for a command parameter."""
+    command_name = command_name.upper().strip()
+    parm_name = parm_name.upper().strip()
+    values = []
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT VALID_VALUE, TEXT_DESCRIPTION
+                FROM PARM_VALID_VALUES
+                WHERE COMMAND_NAME = %s AND PARM_NAME = %s
+                ORDER BY ORDINAL_POSITION, VALID_VALUE
+            """, (command_name, parm_name))
+            for row in cursor.fetchall():
+                values.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to get valid values for {command_name}.{parm_name}: {e}")
+    return values
+
+
+def create_command(
+    command_name: str,
+    text_description: str,
+    screen_name: str = None,
+    command_library: str = 'QSYS',
+    processing_program: str = None,
+    allow_interactive: str = 'YES',
+    allow_batch: str = 'YES'
+) -> tuple[bool, str]:
+    """Create a new command definition."""
+    command_name = command_name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO COMMAND_INFO (COMMAND_NAME, COMMAND_LIBRARY, TEXT_DESCRIPTION,
+                                          SCREEN_NAME, PROCESSING_PROGRAM,
+                                          ALLOW_RUN_INTERACTIVE, ALLOW_RUN_BATCH)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (COMMAND_NAME) DO UPDATE SET
+                    TEXT_DESCRIPTION = EXCLUDED.TEXT_DESCRIPTION,
+                    SCREEN_NAME = EXCLUDED.SCREEN_NAME,
+                    PROCESSING_PROGRAM = EXCLUDED.PROCESSING_PROGRAM,
+                    ALLOW_RUN_INTERACTIVE = EXCLUDED.ALLOW_RUN_INTERACTIVE,
+                    ALLOW_RUN_BATCH = EXCLUDED.ALLOW_RUN_BATCH
+            """, (command_name, command_library, text_description, screen_name,
+                  processing_program, allow_interactive, allow_batch))
+        return True, f"Command {command_name} created"
+    except Exception as e:
+        return False, f"Failed to create command: {e}"
+
+
+def add_command_parameter(
+    command_name: str,
+    parm_name: str,
+    ordinal_position: int,
+    prompt_text: str,
+    data_type: str = '*CHAR',
+    length: int = 10,
+    default_value: str = None,
+    is_required: str = 'NO'
+) -> tuple[bool, str]:
+    """Add a parameter to a command."""
+    command_name = command_name.upper().strip()
+    parm_name = parm_name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO COMMAND_PARM_INFO
+                    (COMMAND_NAME, PARM_NAME, ORDINAL_POSITION, DATA_TYPE, LENGTH,
+                     DEFAULT_VALUE, PROMPT_TEXT, IS_REQUIRED)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (COMMAND_NAME, PARM_NAME) DO UPDATE SET
+                    ORDINAL_POSITION = EXCLUDED.ORDINAL_POSITION,
+                    DATA_TYPE = EXCLUDED.DATA_TYPE,
+                    LENGTH = EXCLUDED.LENGTH,
+                    DEFAULT_VALUE = EXCLUDED.DEFAULT_VALUE,
+                    PROMPT_TEXT = EXCLUDED.PROMPT_TEXT,
+                    IS_REQUIRED = EXCLUDED.IS_REQUIRED
+            """, (command_name, parm_name, ordinal_position, data_type, length,
+                  default_value, prompt_text, is_required))
+        return True, f"Parameter {parm_name} added to {command_name}"
+    except Exception as e:
+        return False, f"Failed to add parameter: {e}"
+
+
+def add_parameter_valid_value(
+    command_name: str,
+    parm_name: str,
+    valid_value: str,
+    text_description: str = '',
+    ordinal_position: int = 0
+) -> tuple[bool, str]:
+    """Add a valid value for a parameter."""
+    command_name = command_name.upper().strip()
+    parm_name = parm_name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO PARM_VALID_VALUES
+                    (COMMAND_NAME, PARM_NAME, VALID_VALUE, TEXT_DESCRIPTION, ORDINAL_POSITION)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (COMMAND_NAME, PARM_NAME, VALID_VALUE) DO UPDATE SET
+                    TEXT_DESCRIPTION = EXCLUDED.TEXT_DESCRIPTION,
+                    ORDINAL_POSITION = EXCLUDED.ORDINAL_POSITION
+            """, (command_name, parm_name, valid_value, text_description, ordinal_position))
+        return True, f"Valid value {valid_value} added"
+    except Exception as e:
+        return False, f"Failed to add valid value: {e}"
+
+
+def populate_default_commands() -> None:
+    """Populate the commands table with default system commands."""
+    # Command definitions: (name, description, screen_name)
+    commands = [
+        # Work with commands
+        ('WRKACTJOB', 'Work with Active Jobs', 'wrkactjob'),
+        ('WRKJOBQ', 'Work with Job Queues', 'wrkjobq'),
+        ('WRKSVC', 'Work with Services (Docker)', 'wrksvc'),
+        ('WRKHLTH', 'Work with Health Checks', 'wrkhlth'),
+        ('WRKBKP', 'Work with Backups', 'wrkbkp'),
+        ('WRKALR', 'Work with Alerts', 'wrkalr'),
+        ('WRKNETDEV', 'Work with Network Devices', 'wrknetdev'),
+        ('WRKUSRPRF', 'Work with User Profiles', 'wrkusrprf'),
+        ('WRKMSGQ', 'Work with Message Queues', 'wrkmsgq'),
+        ('WRKDTAARA', 'Work with Data Areas', 'wrkdtaara'),
+        ('WRKJOBD', 'Work with Job Descriptions', 'wrkjobd'),
+        ('WRKOUTQ', 'Work with Output Queues', 'wrkoutq'),
+        ('WRKSPLF', 'Work with Spooled Files', 'wrksplf'),
+        ('WRKJOBSCDE', 'Work with Job Schedule Entries', 'wrkjobscde'),
+        ('WRKAUTL', 'Work with Authorization Lists', 'wrkautl'),
+        ('WRKSBSD', 'Work with Subsystem Descriptions', 'wrksbsd'),
+        ('WRKSCHEMA', 'Work with Schemas', 'wrkschema'),
+        ('WRKLIB', 'Work with Libraries', 'wrkschema'),
+        ('WRKSYSVAL', 'Work with System Values', 'wrksysval'),
+        # Display commands
+        ('DSPSYSSTS', 'Display System Status', 'dspsyssts'),
+        ('DSPLOG', 'Display Log', 'dsplog'),
+        ('DSPMSG', 'Display Messages', 'dspmsg'),
+        ('DSPDTAARA', 'Display Data Area', 'dspdtaara'),
+        ('DSPJOBD', 'Display Job Description', 'dspjobd'),
+        ('DSPSPLF', 'Display Spooled File', 'dspsplf'),
+        ('DSPAUTL', 'Display Authorization List', 'dspautl'),
+        ('DSPOBJAUT', 'Display Object Authority', 'dspobjaut'),
+        ('DSPUSRAUT', 'Display User Authorities', 'user_authorities'),
+        ('DSPSYSVAL', 'Display System Values', 'wrksysval'),
+        # Create commands
+        ('CRTUSRPRF', 'Create User Profile', 'user_create'),
+        ('CRTSCHEMA', 'Create Schema', 'schema_create'),
+        ('CRTLIB', 'Create Library', 'schema_create'),
+        ('CRTDTAARA', 'Create Data Area', 'crtdtaara'),
+        ('CRTJOBD', 'Create Job Description', 'crtjobd'),
+        ('CRTAUTL', 'Create Authorization List', 'crtautl'),
+        # Change commands
+        ('CHGDTAARA', 'Change Data Area', 'chgdtaara'),
+        ('CHGSYSVAL', 'Change System Value', 'chgsysval'),
+        # Add/Remove commands
+        ('ADDJOBSCDE', 'Add Job Schedule Entry', 'addjobscde'),
+        # Authority commands
+        ('GRTOBJAUT', 'Grant Object Authority', 'grtobjaut'),
+        ('RVKOBJAUT', 'Revoke Object Authority', 'rvkobjaut'),
+        # Submit commands
+        ('SBMJOB', 'Submit Job', 'sbmjob'),
+        # Send commands
+        ('SNDMSG', 'Send Message', 'sndmsg'),
+        # Subsystem commands
+        ('STRSBS', 'Start Subsystem', 'strsbs'),
+        ('ENDSBS', 'End Subsystem', 'endsbs'),
+        # Navigation
+        ('GO', 'Go to Menu', 'main'),
+        ('SIGNOFF', 'Sign Off', 'signon'),
+    ]
+
+    for cmd_name, description, screen_name in commands:
+        create_command(cmd_name, description, screen_name)
+
+    # Add parameters for key commands
+    _populate_crtusrprf_parameters()
+    _populate_sbmjob_parameters()
+    _populate_sndmsg_parameters()
+    _populate_crtdtaara_parameters()
+    _populate_chgsysval_parameters()
+    _populate_grtobjaut_parameters()
+    _populate_addjobscde_parameters()
+
+    logger.info("Default commands populated")
+
+
+def _populate_crtusrprf_parameters():
+    """Populate CRTUSRPRF command parameters."""
+    cmd = 'CRTUSRPRF'
+
+    # Parameters
+    add_command_parameter(cmd, 'USRPRF', 1, 'User profile', '*NAME', 10, None, 'YES')
+    add_command_parameter(cmd, 'PASSWORD', 2, 'Password', '*CHAR', 128, '*USRPRF', 'NO')
+    add_command_parameter(cmd, 'USRCLS', 3, 'User class', '*CHAR', 10, '*USER', 'NO')
+    add_command_parameter(cmd, 'TEXT', 4, 'Text description', '*CHAR', 50, None, 'NO')
+    add_command_parameter(cmd, 'GRPPRF', 5, 'Group profile', '*NAME', 10, '*NONE', 'NO')
+    add_command_parameter(cmd, 'CPYUSRPRF', 6, 'Copy from user', '*NAME', 10, None, 'NO')
+
+    # Valid values for USRCLS
+    add_parameter_valid_value(cmd, 'USRCLS', '*SECOFR', 'Security Officer', 1)
+    add_parameter_valid_value(cmd, 'USRCLS', '*SECADM', 'Security Administrator', 2)
+    add_parameter_valid_value(cmd, 'USRCLS', '*PGMR', 'Programmer', 3)
+    add_parameter_valid_value(cmd, 'USRCLS', '*SYSOPR', 'System Operator', 4)
+    add_parameter_valid_value(cmd, 'USRCLS', '*USER', 'User', 5)
+
+    # Valid values for PASSWORD
+    add_parameter_valid_value(cmd, 'PASSWORD', '*USRPRF', 'Same as user profile', 1)
+    add_parameter_valid_value(cmd, 'PASSWORD', '*NONE', 'No password', 2)
+
+    # Valid values for GRPPRF
+    add_parameter_valid_value(cmd, 'GRPPRF', '*NONE', 'No group profile', 1)
+
+
+def _populate_sbmjob_parameters():
+    """Populate SBMJOB command parameters."""
+    cmd = 'SBMJOB'
+
+    add_command_parameter(cmd, 'CMD', 1, 'Command to run', '*CMD', 256, None, 'YES')
+    add_command_parameter(cmd, 'JOB', 2, 'Job name', '*NAME', 10, '*JOBD', 'NO')
+    add_command_parameter(cmd, 'JOBQ', 3, 'Job queue', '*NAME', 10, '*JOBD', 'NO')
+    add_command_parameter(cmd, 'JOBD', 4, 'Job description', '*NAME', 10, 'QBATCH', 'NO')
+    add_command_parameter(cmd, 'SCDDATE', 5, 'Scheduled date', '*CHAR', 10, '*CURRENT', 'NO')
+    add_command_parameter(cmd, 'SCDTIME', 6, 'Scheduled time', '*CHAR', 8, '*CURRENT', 'NO')
+
+    # Valid values
+    add_parameter_valid_value(cmd, 'JOB', '*JOBD', 'Use job description', 1)
+    add_parameter_valid_value(cmd, 'JOBQ', '*JOBD', 'Use job description', 1)
+    add_parameter_valid_value(cmd, 'JOBQ', 'QBATCH', 'Batch job queue', 2)
+    add_parameter_valid_value(cmd, 'JOBQ', 'QINTER', 'Interactive job queue', 3)
+    add_parameter_valid_value(cmd, 'SCDDATE', '*CURRENT', 'Current date', 1)
+    add_parameter_valid_value(cmd, 'SCDTIME', '*CURRENT', 'Current time', 1)
+
+
+def _populate_sndmsg_parameters():
+    """Populate SNDMSG command parameters."""
+    cmd = 'SNDMSG'
+
+    add_command_parameter(cmd, 'MSG', 1, 'Message text', '*CHAR', 256, None, 'YES')
+    add_command_parameter(cmd, 'TOMSGQ', 2, 'To message queue', '*NAME', 10, '*SYSOPR', 'NO')
+    add_command_parameter(cmd, 'MSGTYPE', 3, 'Message type', '*CHAR', 10, '*INFO', 'NO')
+
+    add_parameter_valid_value(cmd, 'TOMSGQ', '*SYSOPR', 'System operator queue', 1)
+    add_parameter_valid_value(cmd, 'TOMSGQ', '*ALLACT', 'All active users', 2)
+    add_parameter_valid_value(cmd, 'MSGTYPE', '*INFO', 'Informational', 1)
+    add_parameter_valid_value(cmd, 'MSGTYPE', '*INQ', 'Inquiry (requires reply)', 2)
+    add_parameter_valid_value(cmd, 'MSGTYPE', '*COMP', 'Completion', 3)
+
+
+def _populate_crtdtaara_parameters():
+    """Populate CRTDTAARA command parameters."""
+    cmd = 'CRTDTAARA'
+
+    add_command_parameter(cmd, 'DTAARA', 1, 'Data area name', '*NAME', 10, None, 'YES')
+    add_command_parameter(cmd, 'TYPE', 2, 'Data type', '*CHAR', 10, '*CHAR', 'NO')
+    add_command_parameter(cmd, 'LEN', 3, 'Length', '*DEC', 5, '50', 'NO')
+    add_command_parameter(cmd, 'VALUE', 4, 'Initial value', '*CHAR', 2000, None, 'NO')
+    add_command_parameter(cmd, 'TEXT', 5, 'Text description', '*CHAR', 50, None, 'NO')
+
+    add_parameter_valid_value(cmd, 'TYPE', '*CHAR', 'Character', 1)
+    add_parameter_valid_value(cmd, 'TYPE', '*DEC', 'Decimal', 2)
+    add_parameter_valid_value(cmd, 'TYPE', '*LGL', 'Logical', 3)
+
+
+def _populate_chgsysval_parameters():
+    """Populate CHGSYSVAL command parameters."""
+    cmd = 'CHGSYSVAL'
+
+    add_command_parameter(cmd, 'SYSVAL', 1, 'System value', '*NAME', 20, None, 'YES')
+    add_command_parameter(cmd, 'VALUE', 2, 'New value', '*CHAR', 256, None, 'YES')
+
+
+def _populate_grtobjaut_parameters():
+    """Populate GRTOBJAUT command parameters."""
+    cmd = 'GRTOBJAUT'
+
+    add_command_parameter(cmd, 'OBJ', 1, 'Object', '*NAME', 128, None, 'YES')
+    add_command_parameter(cmd, 'OBJTYPE', 2, 'Object type', '*CHAR', 10, '*FILE', 'NO')
+    add_command_parameter(cmd, 'USER', 3, 'User', '*NAME', 10, None, 'YES')
+    add_command_parameter(cmd, 'AUT', 4, 'Authority', '*CHAR', 10, '*USE', 'NO')
+
+    add_parameter_valid_value(cmd, 'OBJTYPE', '*FILE', 'File/Table', 1)
+    add_parameter_valid_value(cmd, 'OBJTYPE', '*PGM', 'Program', 2)
+    add_parameter_valid_value(cmd, 'OBJTYPE', '*DTAARA', 'Data Area', 3)
+    add_parameter_valid_value(cmd, 'OBJTYPE', '*MSGQ', 'Message Queue', 4)
+    add_parameter_valid_value(cmd, 'OBJTYPE', '*OUTQ', 'Output Queue', 5)
+
+    add_parameter_valid_value(cmd, 'AUT', '*ALL', 'All authority', 1)
+    add_parameter_valid_value(cmd, 'AUT', '*CHANGE', 'Change authority', 2)
+    add_parameter_valid_value(cmd, 'AUT', '*USE', 'Use authority', 3)
+    add_parameter_valid_value(cmd, 'AUT', '*EXCLUDE', 'Exclude', 4)
+
+    add_parameter_valid_value(cmd, 'USER', '*PUBLIC', 'All users', 1)
+
+
+def _populate_addjobscde_parameters():
+    """Populate ADDJOBSCDE command parameters."""
+    cmd = 'ADDJOBSCDE'
+
+    add_command_parameter(cmd, 'JOB', 1, 'Job name', '*NAME', 10, None, 'YES')
+    add_command_parameter(cmd, 'CMD', 2, 'Command to run', '*CMD', 256, None, 'YES')
+    add_command_parameter(cmd, 'FRQ', 3, 'Frequency', '*CHAR', 10, '*WEEKLY', 'NO')
+    add_command_parameter(cmd, 'SCDDATE', 4, 'Scheduled date', '*CHAR', 10, '*NONE', 'NO')
+    add_command_parameter(cmd, 'SCDDAY', 5, 'Scheduled day', '*CHAR', 10, '*NONE', 'NO')
+    add_command_parameter(cmd, 'SCDTIME', 6, 'Scheduled time', '*CHAR', 8, '00:00', 'NO')
+    add_command_parameter(cmd, 'JOBD', 7, 'Job description', '*NAME', 10, 'QBATCH', 'NO')
+    add_command_parameter(cmd, 'TEXT', 8, 'Text description', '*CHAR', 50, None, 'NO')
+
+    add_parameter_valid_value(cmd, 'FRQ', '*ONCE', 'Run once', 1)
+    add_parameter_valid_value(cmd, 'FRQ', '*DAILY', 'Every day', 2)
+    add_parameter_valid_value(cmd, 'FRQ', '*WEEKLY', 'Every week', 3)
+    add_parameter_valid_value(cmd, 'FRQ', '*MONTHLY', 'Every month', 4)
+
+    add_parameter_valid_value(cmd, 'SCDDAY', '*NONE', 'Not specified', 0)
+    add_parameter_valid_value(cmd, 'SCDDAY', '*SUN', 'Sunday', 1)
+    add_parameter_valid_value(cmd, 'SCDDAY', '*MON', 'Monday', 2)
+    add_parameter_valid_value(cmd, 'SCDDAY', '*TUE', 'Tuesday', 3)
+    add_parameter_valid_value(cmd, 'SCDDAY', '*WED', 'Wednesday', 4)
+    add_parameter_valid_value(cmd, 'SCDDAY', '*THU', 'Thursday', 5)
+    add_parameter_valid_value(cmd, 'SCDDAY', '*FRI', 'Friday', 6)
+    add_parameter_valid_value(cmd, 'SCDDAY', '*SAT', 'Saturday', 7)
+
+    add_parameter_valid_value(cmd, 'SCDDATE', '*NONE', 'Not specified', 1)
+    add_parameter_valid_value(cmd, 'SCDDATE', '*CURRENT', 'Current date', 2)
