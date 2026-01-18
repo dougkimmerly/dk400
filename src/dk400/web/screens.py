@@ -418,6 +418,20 @@ class ScreenManager:
                 result = self._handle_qrydefine_fkey(session, key, fields)
                 if result:
                     return result
+            elif screen in ('qryfields', 'qrywhere', 'qrysort', 'qrycond'):
+                # F5=Run preview from any query editing screen
+                qry_schema = session.field_values.get('qry_schema')
+                qry_table = session.field_values.get('qry_table')
+
+                if not qry_schema or not qry_table:
+                    session.message = "Select file first before running"
+                    session.message_level = "error"
+                    return self.get_screen(session, screen)
+
+                # Set return screen so F12 comes back here
+                session.field_values['qry_return_screen'] = screen
+                session.set_offset('qryrun', 0)
+                return self.get_screen(session, 'qryrun')
             return self.get_screen(session, screen)
         elif key == 'F6':
             # Screen-specific F6 handling
@@ -6472,7 +6486,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel    (blank = all columns)"))
+        content.append(pad_line(" F3=Exit  F5=Run  F12=Cancel    (blank = all columns)"))
 
         return {
             "type": "screen",
@@ -6617,7 +6631,7 @@ class ScreenManager:
         ])
         fields.append({"id": "cmd"})
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Add  F12=Cancel"))
+        content.append(pad_line(" F3=Exit  F5=Run  F6=Add  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -6767,7 +6781,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66, "class": "field-input"},
         ])
 
-        content.append(pad_line(" F3=Exit  F4=Prompt  F12=Cancel"))
+        content.append(pad_line(" F3=Exit  F4=Prompt  F5=Run  F12=Cancel"))
 
         field_list = [
             {"id": "field"},
@@ -6940,7 +6954,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+        content.append(pad_line(" F3=Exit  F5=Run  F12=Cancel"))
 
         return {
             "type": "screen",
