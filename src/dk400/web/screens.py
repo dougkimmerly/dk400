@@ -53,6 +53,10 @@ from src.dk400.web.database import (
     remove_job_queue_entry, get_subsystem_job_queues,
     # Commands
     list_commands, get_command, get_command_parameters, get_parameter_valid_values,
+    # Query Definitions (WRKQRY)
+    list_query_definitions, create_query_definition, get_query_definition,
+    update_query_definition, delete_query_definition, execute_query_definition,
+    run_adhoc_query, list_table_columns, QUERY_OPERATORS,
 )
 
 
@@ -202,6 +206,10 @@ class ScreenManager:
         'WRKSBSD': 'wrksbsd',
         'STRSBS': 'strsbs',
         'ENDSBS': 'endsbs',
+        # Query Definitions
+        'WRKQRY': 'wrkqry',
+        'STRQRY': 'wrkqry',  # AS/400 alias
+        'RUNQRY': 'qryrun',
         'SIGNOFF': 'signon',
         'GO': 'main',
         '1': 'wrkactjob',
@@ -370,6 +378,11 @@ class ScreenManager:
             session.field_values['f4_filter'] = cmd_input
             return self.get_screen(session, 'cmdlist')
         elif key == 'F5':
+            # Screen-specific F5 handling
+            if screen == 'qrydefine':
+                result = self._handle_qrydefine_fkey(session, key)
+                if result:
+                    return result
             return self.get_screen(session, screen)
         elif key == 'F6':
             # Screen-specific F6 handling
@@ -416,6 +429,19 @@ class ScreenManager:
             elif screen == 'wrksbsd':
                 # F6=Create on Work with Subsystems
                 return self.get_screen(session, 'crtsbsd')
+            elif screen == 'wrkqry':
+                # F6=Create on Work with Queries
+                # Clear query session state for new query
+                for key in list(session.field_values.keys()):
+                    if key.startswith('qry_'):
+                        del session.field_values[key]
+                session.field_values['qry_mode'] = 'create'
+                return self.get_screen(session, 'qrydefine')
+            elif screen == 'qrywhere':
+                # F6=Add condition
+                session.field_values['qry_cond_mode'] = 'add'
+                session.field_values.pop('qry_edit_cond_idx', None)
+                return self.get_screen(session, 'qrycond')
         elif key == 'F7':
             # Screen-specific F7 handling
             if screen == 'wrkalr':
@@ -424,6 +450,12 @@ class ScreenManager:
             elif screen == 'alert_detail':
                 session.message = "Alert acknowledged"
                 return self.get_screen(session, 'wrkalr')
+        elif key == 'F10':
+            # Screen-specific F10 handling (Save)
+            if screen == 'qrydefine':
+                result = self._handle_qrydefine_fkey(session, key)
+                if result:
+                    return result
         elif key == 'F12':
             if screen in ('signon', 'main'):
                 return self.get_screen(session, screen)
@@ -473,6 +505,17 @@ class ScreenManager:
             # Subsystem screens
             elif screen in ('dspsbsd', 'crtsbsd', 'strsbs', 'endsbs'):
                 return self.get_screen(session, 'wrksbsd')
+            # Query screens
+            elif screen == 'qrydefine':
+                return self.get_screen(session, 'wrkqry')
+            elif screen in ('qryfiles', 'qryfields', 'qrywhere', 'qrysort'):
+                return self.get_screen(session, 'qrydefine')
+            elif screen == 'qrycond':
+                return self.get_screen(session, 'qrywhere')
+            elif screen == 'qryrun':
+                # Could come from wrkqry (option 5) or qrydefine (F5)
+                return_screen = session.field_values.get('qry_return_screen', 'wrkqry')
+                return self.get_screen(session, return_screen)
             # Command list (F4 prompt)
             elif screen == 'cmdlist':
                 return_screen = session.field_values.get('f4_return_screen', 'main')
@@ -507,6 +550,12 @@ class ScreenManager:
         'dspobjaut': 10,
         'cmdlist': 12,
         'parmlist': 10,
+        # Query screens
+        'wrkqry': 10,
+        'qryfields': 15,
+        'qrywhere': 8,
+        'qrysort': 8,
+        'qryrun': 18,
     }
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
@@ -5694,3 +5743,1237 @@ class ScreenManager:
         session.message_level = "info" if success else "error"
 
         return self.get_screen(session, 'wrksbsd')
+
+    # ==========================================================================
+    # WRKQRY - Work with Query Definitions (Query/400-style)
+    # ==========================================================================
+
+    def _screen_wrkqry(self, session: Session) -> dict:
+        """Work with Query Definitions screen - list saved queries."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Get query definitions, optionally filter by user
+        queries = list_query_definitions()
+        offset = session.get_offset('wrkqry')
+        page_size = self.PAGE_SIZES['wrkqry']
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       Work with Queries                       {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type options, press Enter."))
+        content.append(pad_line("   1=Create   2=Change   4=Delete   5=Run"))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append([{"type": "text", "text": pad_line(" Opt  Query      Library    Description                     Updated"), "class": "field-reverse"}])
+
+        # Query list
+        fields = []
+        page_queries = queries[offset:offset + page_size]
+
+        for i, q in enumerate(page_queries):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            # Format updated timestamp
+            updated = q.get('updated_at', q.get('created_at', ''))
+            if updated:
+                if isinstance(updated, str):
+                    updated_str = updated[:16] if len(updated) >= 16 else updated
+                else:
+                    updated_str = updated.strftime('%Y-%m-%d %H:%M')
+            else:
+                updated_str = ''
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": field_id, "width": 3, "value": "", "class": "field-input"},
+                {"type": "text", "text": f"  {q['name']:<10} {q['library']:<10} {q.get('description', '')[:30]:<30} {updated_str}"},
+            ])
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_queries)):
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        total = len(queries)
+        if total == 0:
+            indicator = "No queries defined"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        # Command line
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66, "class": "field-input"},
+        ])
+        fields.append({"id": "cmd"})
+
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrkqry",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_wrkqry(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Query Definitions submission."""
+        # Check for command line entry
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        # Get current page of queries
+        queries = list_query_definitions()
+        offset = session.get_offset('wrkqry')
+        page_size = self.PAGE_SIZES['wrkqry']
+        page_queries = queries[offset:offset + page_size]
+
+        # Process options
+        for i, q in enumerate(page_queries):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if not opt:
+                continue
+
+            if opt == '1':
+                # Create new query - same as F6
+                for key in list(session.field_values.keys()):
+                    if key.startswith('qry_'):
+                        del session.field_values[key]
+                session.field_values['qry_mode'] = 'create'
+                return self.get_screen(session, 'qrydefine')
+
+            elif opt == '2':
+                # Change existing query
+                qry_def = get_query_definition(q['name'], q['library'])
+                if not qry_def:
+                    session.message = f"Query {q['name']} not found"
+                    session.message_level = "error"
+                    return self.get_screen(session, 'wrkqry')
+
+                # Load query into session
+                session.field_values['qry_mode'] = 'change'
+                session.field_values['qry_name'] = qry_def['name']
+                session.field_values['qry_library'] = qry_def['library']
+                session.field_values['qry_desc'] = qry_def.get('description', '')
+                session.field_values['qry_schema'] = qry_def.get('source_schema', '')
+                session.field_values['qry_table'] = qry_def.get('source_table', '')
+                session.field_values['qry_columns'] = qry_def.get('selected_columns', [])
+                session.field_values['qry_conditions'] = qry_def.get('where_conditions', [])
+                session.field_values['qry_orderby'] = qry_def.get('order_by_fields', [])
+                session.field_values['qry_output'] = qry_def.get('output_type', '*DISPLAY')
+                session.field_values['qry_limit'] = qry_def.get('row_limit', 0)
+                return self.get_screen(session, 'qrydefine')
+
+            elif opt == '4':
+                # Delete query
+                success, msg = delete_query_definition(q['name'], q['library'])
+                session.message = msg
+                session.message_level = "info" if success else "error"
+                return self.get_screen(session, 'wrkqry')
+
+            elif opt == '5':
+                # Run query
+                session.field_values['qry_run_name'] = q['name']
+                session.field_values['qry_run_library'] = q['library']
+                session.field_values['qry_return_screen'] = 'wrkqry'
+                session.set_offset('qryrun', 0)
+                return self.get_screen(session, 'qryrun')
+
+            else:
+                session.message = f"Option {opt} not valid"
+                session.message_level = "error"
+                return self.get_screen(session, 'wrkqry')
+
+        return self.get_screen(session, 'wrkqry')
+
+    def _screen_qrydefine(self, session: Session) -> dict:
+        """Define Query screen - main menu for query definition."""
+        hostname, date_str, time_str = get_system_info()
+
+        mode = session.field_values.get('qry_mode', 'create')
+        qry_name = session.field_values.get('qry_name', '')
+        qry_library = session.field_values.get('qry_library', 'QGPL')
+        qry_desc = session.field_values.get('qry_desc', '')
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+        qry_columns = session.field_values.get('qry_columns', [])
+        qry_conditions = session.field_values.get('qry_conditions', [])
+        qry_orderby = session.field_values.get('qry_orderby', [])
+
+        # Format status indicators
+        file_status = f"{qry_schema}.{qry_table}" if qry_schema and qry_table else "(not selected)"
+        col_count = len(qry_columns) if qry_columns else 0
+        col_status = f"{col_count} selected" if col_count else "(all columns)"
+        cond_count = len(qry_conditions) if qry_conditions else 0
+        cond_status = f"{cond_count} condition(s)" if cond_count else "(none)"
+        sort_count = len(qry_orderby) if qry_orderby else 0
+        sort_status = f"{sort_count} field(s)" if sort_count else "(none)"
+
+        title = "Define Query" if mode == 'create' else f"Change Query - {qry_name}"
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       {title:<28}           {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        # Query identification fields
+        content.append([
+            {"type": "text", "text": " Query name  . . . . . . "},
+            {"type": "input", "id": "name", "width": 10, "value": qry_name, "class": "field-input"},
+            {"type": "text", "text": "   Library . . "},
+            {"type": "input", "id": "library", "width": 10, "value": qry_library, "class": "field-input"},
+        ])
+        content.append([
+            {"type": "text", "text": " Description . . . . . . "},
+            {"type": "input", "id": "desc", "width": 50, "value": qry_desc, "class": "field-input"},
+        ])
+        content.append(pad_line(""))
+
+        # Menu options with current status
+        content.append(pad_line(" Type option number, press Enter."))
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "option", "width": 2, "value": "", "class": "field-input"},
+            {"type": "text", "text": f"  1. Select file . . . . . . . . . . .  {file_status}"},
+        ])
+        content.append([
+            {"type": "text", "text": "     "},
+            {"type": "text", "text": f"2. Select fields . . . . . . . . . .  {col_status}"},
+        ])
+        content.append([
+            {"type": "text", "text": "     "},
+            {"type": "text", "text": f"3. Select records (WHERE) . . . . .  {cond_status}"},
+        ])
+        content.append([
+            {"type": "text", "text": "     "},
+            {"type": "text", "text": f"4. Select sort fields . . . . . . .  {sort_status}"},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+
+        # Pad to consistent height
+        while len(content) < 19:
+            content.append(pad_line(""))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        # Command line
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66, "class": "field-input"},
+        ])
+
+        content.append(pad_line(" F3=Exit  F5=Run  F10=Save  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "qrydefine",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "name"},
+                {"id": "library"},
+                {"id": "desc"},
+                {"id": "option"},
+                {"id": "cmd"},
+            ],
+            "activeField": 3,  # Focus on option field
+        }
+
+    def _submit_qrydefine(self, session: Session, fields: dict) -> dict:
+        """Handle Define Query submission."""
+        # Check for command line entry
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        # Update session values from fields
+        qry_name = fields.get('name', '').strip().upper()
+        qry_library = fields.get('library', 'QGPL').strip().upper() or 'QGPL'
+        qry_desc = fields.get('desc', '').strip()
+        option = fields.get('option', '').strip()
+
+        # Save field values to session
+        session.field_values['qry_name'] = qry_name
+        session.field_values['qry_library'] = qry_library
+        session.field_values['qry_desc'] = qry_desc
+
+        # Handle menu options
+        if option == '1':
+            # Select file
+            return self.get_screen(session, 'qryfiles')
+        elif option == '2':
+            # Select fields - must have file selected first
+            if not session.field_values.get('qry_schema') or not session.field_values.get('qry_table'):
+                session.message = "Select file first (option 1)"
+                session.message_level = "error"
+                return self.get_screen(session, 'qrydefine')
+            return self.get_screen(session, 'qryfields')
+        elif option == '3':
+            # Select records (WHERE) - must have file selected
+            if not session.field_values.get('qry_schema') or not session.field_values.get('qry_table'):
+                session.message = "Select file first (option 1)"
+                session.message_level = "error"
+                return self.get_screen(session, 'qrydefine')
+            return self.get_screen(session, 'qrywhere')
+        elif option == '4':
+            # Sort fields - must have file selected
+            if not session.field_values.get('qry_schema') or not session.field_values.get('qry_table'):
+                session.message = "Select file first (option 1)"
+                session.message_level = "error"
+                return self.get_screen(session, 'qrydefine')
+            return self.get_screen(session, 'qrysort')
+        elif option:
+            session.message = f"Option {option} not valid"
+            session.message_level = "error"
+            return self.get_screen(session, 'qrydefine')
+
+        # No option selected, just refresh
+        return self.get_screen(session, 'qrydefine')
+
+    def _handle_qrydefine_fkey(self, session: Session, key: str) -> dict:
+        """Handle F-keys for qrydefine screen."""
+        if key == 'F5':
+            # Run query preview
+            qry_schema = session.field_values.get('qry_schema')
+            qry_table = session.field_values.get('qry_table')
+
+            if not qry_schema or not qry_table:
+                session.message = "Select file first before running"
+                session.message_level = "error"
+                return self.get_screen(session, 'qrydefine')
+
+            # Set up for adhoc run
+            session.field_values['qry_return_screen'] = 'qrydefine'
+            session.set_offset('qryrun', 0)
+            return self.get_screen(session, 'qryrun')
+
+        elif key == 'F10':
+            # Save query
+            qry_name = session.field_values.get('qry_name', '').strip().upper()
+            qry_library = session.field_values.get('qry_library', 'QGPL').strip().upper()
+
+            if not qry_name:
+                session.message = "Query name is required to save"
+                session.message_level = "error"
+                return self.get_screen(session, 'qrydefine')
+
+            mode = session.field_values.get('qry_mode', 'create')
+
+            if mode == 'create':
+                # Create new query
+                success, msg = create_query_definition(
+                    name=qry_name,
+                    library=qry_library,
+                    description=session.field_values.get('qry_desc', ''),
+                    source_schema=session.field_values.get('qry_schema'),
+                    source_table=session.field_values.get('qry_table'),
+                    selected_columns=session.field_values.get('qry_columns', []),
+                    where_conditions=session.field_values.get('qry_conditions', []),
+                    order_by_fields=session.field_values.get('qry_orderby', []),
+                    output_type=session.field_values.get('qry_output', '*DISPLAY'),
+                    row_limit=session.field_values.get('qry_limit', 0),
+                    created_by=session.user,
+                )
+            else:
+                # Update existing query
+                success, msg = update_query_definition(
+                    name=qry_name,
+                    library=qry_library,
+                    description=session.field_values.get('qry_desc', ''),
+                    source_schema=session.field_values.get('qry_schema'),
+                    source_table=session.field_values.get('qry_table'),
+                    selected_columns=session.field_values.get('qry_columns', []),
+                    where_conditions=session.field_values.get('qry_conditions', []),
+                    order_by_fields=session.field_values.get('qry_orderby', []),
+                    output_type=session.field_values.get('qry_output', '*DISPLAY'),
+                    row_limit=session.field_values.get('qry_limit', 0),
+                    updated_by=session.user,
+                )
+
+            session.message = msg
+            session.message_level = "info" if success else "error"
+
+            if success:
+                # Clear session state and return to list
+                for key in list(session.field_values.keys()):
+                    if key.startswith('qry_'):
+                        del session.field_values[key]
+                return self.get_screen(session, 'wrkqry')
+
+            return self.get_screen(session, 'qrydefine')
+
+        return None  # Key not handled
+
+    def _screen_qryfiles(self, session: Session) -> dict:
+        """Select File for Query screen - choose schema and table."""
+        hostname, date_str, time_str = get_system_info()
+
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       Select File for Query                   {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type schema and table name, press Enter."))
+        content.append(pad_line(" Press F4 for list of schemas or tables."))
+        content.append(pad_line(""))
+
+        # Schema field
+        content.append([
+            {"type": "text", "text": " Schema (library)  . . . "},
+            {"type": "input", "id": "schema", "width": 30, "value": qry_schema, "class": "field-input"},
+        ])
+        content.append(pad_line(""))
+
+        # Table field
+        content.append([
+            {"type": "text", "text": " Table (file)  . . . . . "},
+            {"type": "input", "id": "table", "width": 30, "value": qry_table, "class": "field-input"},
+        ])
+        content.append(pad_line(""))
+
+        # Pad to consistent height
+        while len(content) < 19:
+            content.append(pad_line(""))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        # Command line
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66, "class": "field-input"},
+        ])
+
+        content.append(pad_line(" F3=Exit  F4=Prompt  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "qryfiles",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "schema"},
+                {"id": "table"},
+                {"id": "cmd"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_qryfiles(self, session: Session, fields: dict) -> dict:
+        """Handle Select File submission."""
+        # Check for command line entry
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        schema = fields.get('schema', '').strip().lower()
+        table = fields.get('table', '').strip().lower()
+
+        if not schema:
+            session.message = "Schema is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'qryfiles')
+
+        if not table:
+            session.message = "Table is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'qryfiles')
+
+        # Verify table exists by trying to get columns
+        columns = list_table_columns(schema, table)
+        if not columns:
+            session.message = f"Table {schema}.{table} not found or has no columns"
+            session.message_level = "error"
+            return self.get_screen(session, 'qryfiles')
+
+        # Save to session
+        session.field_values['qry_schema'] = schema
+        session.field_values['qry_table'] = table
+        # Clear column selection when table changes
+        session.field_values['qry_columns'] = []
+
+        session.message = f"Selected {schema}.{table} ({len(columns)} columns)"
+        session.message_level = "info"
+        return self.get_screen(session, 'qrydefine')
+
+    def _screen_qryfields(self, session: Session) -> dict:
+        """Select Fields for Query screen - choose columns to include."""
+        hostname, date_str, time_str = get_system_info()
+
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+        qry_columns = session.field_values.get('qry_columns', [])
+
+        # Get available columns from table
+        columns = list_table_columns(qry_schema, qry_table) if qry_schema and qry_table else []
+
+        offset = session.get_offset('qryfields')
+        page_size = self.PAGE_SIZES['qryfields']
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       Select Fields for Query                 {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type 1 to select field, blank to deselect. Press Enter."))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append([{"type": "text", "text": pad_line(" Sel  Field Name                    Type          Null  Seq"), "class": "field-reverse"}])
+
+        # Build set of selected column names for quick lookup
+        selected_names = {c['name'] for c in qry_columns}
+
+        # Column list
+        fields = []
+        page_columns = columns[offset:offset + page_size]
+
+        for i, col in enumerate(page_columns):
+            field_id = f"sel_{i}"
+            fields.append({"id": field_id})
+
+            # Check if column is selected and get its sequence
+            is_selected = col['name'] in selected_names
+            seq = ""
+            if is_selected:
+                for j, c in enumerate(qry_columns):
+                    if c['name'] == col['name']:
+                        seq = str(j + 1)
+                        break
+
+            col_type = col.get('data_type', '')[:12]
+            nullable = 'Y' if col.get('is_nullable', True) else 'N'
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": field_id, "width": 1, "value": "1" if is_selected else "", "class": "field-input"},
+                {"type": "text", "text": f"    {col['name']:<28} {col_type:<12} {nullable:^4} {seq:>3}"},
+            ])
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_columns)):
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        total = len(columns)
+        if total == 0:
+            indicator = "No columns"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel    (blank = all columns)"))
+
+        return {
+            "type": "screen",
+            "screen": "qryfields",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qryfields(self, session: Session, fields: dict) -> dict:
+        """Handle Select Fields submission."""
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+        columns = list_table_columns(qry_schema, qry_table) if qry_schema and qry_table else []
+
+        offset = session.get_offset('qryfields')
+        page_size = self.PAGE_SIZES['qryfields']
+        page_columns = columns[offset:offset + page_size]
+
+        # Get current selection
+        qry_columns = session.field_values.get('qry_columns', [])
+        selected_names = {c['name'] for c in qry_columns}
+
+        # Process selections from this page
+        for i, col in enumerate(page_columns):
+            sel = fields.get(f'sel_{i}', '').strip()
+            col_name = col['name']
+
+            if sel == '1':
+                # Add to selection if not already selected
+                if col_name not in selected_names:
+                    qry_columns.append({'name': col_name, 'alias': '', 'seq': len(qry_columns) + 1})
+                    selected_names.add(col_name)
+            else:
+                # Remove from selection if selected
+                if col_name in selected_names:
+                    qry_columns = [c for c in qry_columns if c['name'] != col_name]
+                    selected_names.discard(col_name)
+                    # Re-sequence
+                    for j, c in enumerate(qry_columns):
+                        c['seq'] = j + 1
+
+        session.field_values['qry_columns'] = qry_columns
+
+        # Check if we need to page
+        if offset + page_size < len(columns):
+            # More columns to show
+            session.message = f"{len(qry_columns)} field(s) selected. Page down for more."
+            session.message_level = "info"
+        else:
+            session.message = f"{len(qry_columns)} field(s) selected"
+            session.message_level = "info"
+
+        return self.get_screen(session, 'qryfields')
+
+    def _screen_qrywhere(self, session: Session) -> dict:
+        """Select Records (WHERE) screen - list of conditions."""
+        hostname, date_str, time_str = get_system_info()
+
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+        qry_conditions = session.field_values.get('qry_conditions', [])
+
+        offset = session.get_offset('qrywhere')
+        page_size = self.PAGE_SIZES['qrywhere']
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       Select Records                           {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type options, press Enter."))
+        content.append(pad_line("   2=Change   4=Delete"))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append([{"type": "text", "text": pad_line(" Opt  And/Or  Field                  Test      Value"), "class": "field-reverse"}])
+
+        # Condition list
+        fields = []
+        page_conds = qry_conditions[offset:offset + page_size]
+
+        for i, cond in enumerate(page_conds):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            and_or = cond.get('and_or', 'AND') if i > 0 else ''
+            field_name = cond.get('field', '')[:20]
+            op_code = cond.get('op', 'EQ')
+            op_display = QUERY_OPERATORS.get(op_code, (op_code, op_code))[1][:8]
+            value = str(cond.get('value', ''))[:20]
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": field_id, "width": 3, "value": "", "class": "field-input"},
+                {"type": "text", "text": f"  {and_or:<6} {field_name:<20} {op_display:<8} {value}"},
+            ])
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_conds)):
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        total = len(qry_conditions)
+        if total == 0:
+            indicator = "No conditions (all records)"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        # Command line
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66, "class": "field-input"},
+        ])
+        fields.append({"id": "cmd"})
+
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Add  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "qrywhere",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qrywhere(self, session: Session, fields: dict) -> dict:
+        """Handle Select Records (WHERE) submission."""
+        # Check for command line entry
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        qry_conditions = session.field_values.get('qry_conditions', [])
+        offset = session.get_offset('qrywhere')
+        page_size = self.PAGE_SIZES['qrywhere']
+        page_conds = qry_conditions[offset:offset + page_size]
+
+        # Process options
+        for i, cond in enumerate(page_conds):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if not opt:
+                continue
+
+            actual_idx = offset + i
+
+            if opt == '2':
+                # Change condition
+                session.field_values['qry_edit_cond_idx'] = actual_idx
+                session.field_values['qry_cond_mode'] = 'change'
+                return self.get_screen(session, 'qrycond')
+
+            elif opt == '4':
+                # Delete condition
+                qry_conditions.pop(actual_idx)
+                session.field_values['qry_conditions'] = qry_conditions
+                session.message = "Condition deleted"
+                session.message_level = "info"
+                return self.get_screen(session, 'qrywhere')
+
+            else:
+                session.message = f"Option {opt} not valid"
+                session.message_level = "error"
+                return self.get_screen(session, 'qrywhere')
+
+        return self.get_screen(session, 'qrywhere')
+
+    def _screen_qrycond(self, session: Session) -> dict:
+        """Add/Change Condition screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+        qry_conditions = session.field_values.get('qry_conditions', [])
+        mode = session.field_values.get('qry_cond_mode', 'add')
+        edit_idx = session.field_values.get('qry_edit_cond_idx', -1)
+
+        # Get available columns
+        columns = list_table_columns(qry_schema, qry_table) if qry_schema and qry_table else []
+        col_names = [c['name'] for c in columns]
+
+        # Load existing condition if editing
+        if mode == 'change' and 0 <= edit_idx < len(qry_conditions):
+            cond = qry_conditions[edit_idx]
+            field_val = cond.get('field', '')
+            op_val = cond.get('op', 'EQ')
+            value_val = str(cond.get('value', ''))
+            and_or_val = cond.get('and_or', 'AND')
+        else:
+            field_val = session.field_values.get('qry_cond_field', '')
+            op_val = session.field_values.get('qry_cond_op', 'EQ')
+            value_val = session.field_values.get('qry_cond_value', '')
+            and_or_val = session.field_values.get('qry_cond_andor', 'AND')
+
+        title = "Change Condition" if mode == 'change' else "Add Condition"
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       {title:<28}           {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type values, press Enter. F4=Prompt."))
+        content.append(pad_line(""))
+
+        # Field name
+        content.append([
+            {"type": "text", "text": " Field  . . . . . . . . "},
+            {"type": "input", "id": "field", "width": 30, "value": field_val, "class": "field-input"},
+        ])
+
+        # Operator
+        content.append([
+            {"type": "text", "text": " Test . . . . . . . . . "},
+            {"type": "input", "id": "op", "width": 4, "value": op_val, "class": "field-input"},
+            {"type": "text", "text": "   (EQ NE GT LT GE LE CT SW EW NL NN)"},
+        ])
+
+        # Value
+        content.append([
+            {"type": "text", "text": " Value  . . . . . . . . "},
+            {"type": "input", "id": "value", "width": 40, "value": value_val, "class": "field-input"},
+        ])
+
+        # And/Or (for conditions after the first)
+        if mode == 'add' and len(qry_conditions) > 0 or mode == 'change' and edit_idx > 0:
+            content.append([
+                {"type": "text", "text": " And/Or . . . . . . . . "},
+                {"type": "input", "id": "andor", "width": 4, "value": and_or_val, "class": "field-input"},
+                {"type": "text", "text": "   (AND or OR)"},
+            ])
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(""))
+
+        # Show operator reference
+        content.append(pad_line(" Test codes:"))
+        content.append(pad_line("   EQ=Equal  NE=Not Equal  GT=Greater  LT=Less"))
+        content.append(pad_line("   GE=Greater/Equal  LE=Less/Equal"))
+        content.append(pad_line("   CT=Contains  SW=Starts With  EW=Ends With"))
+        content.append(pad_line("   NL=Is Null  NN=Not Null"))
+
+        # Pad to consistent height
+        while len(content) < 19:
+            content.append(pad_line(""))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        # Command line
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66, "class": "field-input"},
+        ])
+
+        content.append(pad_line(" F3=Exit  F4=Prompt  F12=Cancel"))
+
+        field_list = [
+            {"id": "field"},
+            {"id": "op"},
+            {"id": "value"},
+        ]
+        if mode == 'add' and len(qry_conditions) > 0 or mode == 'change' and edit_idx > 0:
+            field_list.append({"id": "andor"})
+        field_list.append({"id": "cmd"})
+
+        return {
+            "type": "screen",
+            "screen": "qrycond",
+            "cols": 80,
+            "content": content,
+            "fields": field_list,
+            "activeField": 0,
+        }
+
+    def _submit_qrycond(self, session: Session, fields: dict) -> dict:
+        """Handle Add/Change Condition submission."""
+        # Check for command line entry
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        qry_conditions = session.field_values.get('qry_conditions', [])
+        mode = session.field_values.get('qry_cond_mode', 'add')
+        edit_idx = session.field_values.get('qry_edit_cond_idx', -1)
+
+        field_name = fields.get('field', '').strip().lower()
+        op = fields.get('op', 'EQ').strip().upper()
+        value = fields.get('value', '').strip()
+        and_or = fields.get('andor', 'AND').strip().upper()
+
+        # Validate field
+        if not field_name:
+            session.message = "Field name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'qrycond')
+
+        # Validate operator
+        if op not in QUERY_OPERATORS:
+            session.message = f"Invalid test '{op}'. Use EQ, NE, GT, LT, GE, LE, CT, SW, EW, NL, NN"
+            session.message_level = "error"
+            return self.get_screen(session, 'qrycond')
+
+        # Value not required for NL/NN
+        if op not in ('NL', 'NN') and not value:
+            session.message = "Value is required for this test"
+            session.message_level = "error"
+            return self.get_screen(session, 'qrycond')
+
+        # Validate and_or
+        if and_or not in ('AND', 'OR'):
+            and_or = 'AND'
+
+        # Build condition
+        condition = {
+            'field': field_name,
+            'op': op,
+            'value': value,
+            'and_or': and_or,
+        }
+
+        if mode == 'change' and 0 <= edit_idx < len(qry_conditions):
+            # Update existing condition
+            qry_conditions[edit_idx] = condition
+            session.message = "Condition changed"
+        else:
+            # Add new condition
+            qry_conditions.append(condition)
+            session.message = "Condition added"
+
+        session.field_values['qry_conditions'] = qry_conditions
+        session.message_level = "info"
+
+        # Clear edit state
+        session.field_values.pop('qry_cond_mode', None)
+        session.field_values.pop('qry_edit_cond_idx', None)
+        session.field_values.pop('qry_cond_field', None)
+        session.field_values.pop('qry_cond_op', None)
+        session.field_values.pop('qry_cond_value', None)
+        session.field_values.pop('qry_cond_andor', None)
+
+        return self.get_screen(session, 'qrywhere')
+
+    def _screen_qrysort(self, session: Session) -> dict:
+        """Select Sort Fields screen - ORDER BY fields."""
+        hostname, date_str, time_str = get_system_info()
+
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+        qry_orderby = session.field_values.get('qry_orderby', [])
+
+        # Get available columns
+        columns = list_table_columns(qry_schema, qry_table) if qry_schema and qry_table else []
+
+        offset = session.get_offset('qrysort')
+        page_size = self.PAGE_SIZES['qrysort']
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       Select Sort Fields                       {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type sort sequence number (1-99) and A=Ascending or D=Descending."))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append([{"type": "text", "text": pad_line(" Seq  A/D  Field Name                    Type"), "class": "field-reverse"}])
+
+        # Build lookup for sort fields
+        sort_lookup = {}
+        for s in qry_orderby:
+            sort_lookup[s['field']] = {'seq': s['seq'], 'dir': s.get('dir', 'ASC')}
+
+        # Column list
+        fields = []
+        page_columns = columns[offset:offset + page_size]
+
+        for i, col in enumerate(page_columns):
+            col_name = col['name']
+            seq_id = f"seq_{i}"
+            dir_id = f"dir_{i}"
+            fields.append({"id": seq_id})
+            fields.append({"id": dir_id})
+
+            if col_name in sort_lookup:
+                seq_val = str(sort_lookup[col_name]['seq'])
+                dir_val = 'A' if sort_lookup[col_name]['dir'] == 'ASC' else 'D'
+            else:
+                seq_val = ''
+                dir_val = ''
+
+            col_type = col.get('data_type', '')[:12]
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": seq_id, "width": 2, "value": seq_val, "class": "field-input"},
+                {"type": "text", "text": "   "},
+                {"type": "input", "id": dir_id, "width": 1, "value": dir_val, "class": "field-input"},
+                {"type": "text", "text": f"    {col_name:<28} {col_type}"},
+            ])
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_columns)):
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        total = len(columns)
+        if total == 0:
+            indicator = "No columns"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "qrysort",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qrysort(self, session: Session, fields: dict) -> dict:
+        """Handle Select Sort Fields submission."""
+        qry_schema = session.field_values.get('qry_schema', '')
+        qry_table = session.field_values.get('qry_table', '')
+        columns = list_table_columns(qry_schema, qry_table) if qry_schema and qry_table else []
+
+        offset = session.get_offset('qrysort')
+        page_size = self.PAGE_SIZES['qrysort']
+        page_columns = columns[offset:offset + page_size]
+
+        # Build new sort order from all pages
+        # Keep existing entries from other pages
+        qry_orderby = session.field_values.get('qry_orderby', [])
+        page_col_names = {c['name'] for c in page_columns}
+
+        # Remove entries for columns on this page (will re-add)
+        qry_orderby = [s for s in qry_orderby if s['field'] not in page_col_names]
+
+        # Process this page
+        new_entries = []
+        for i, col in enumerate(page_columns):
+            seq = fields.get(f'seq_{i}', '').strip()
+            dir_val = fields.get(f'dir_{i}', 'A').strip().upper()
+
+            if seq:
+                try:
+                    seq_num = int(seq)
+                    if 1 <= seq_num <= 99:
+                        direction = 'DESC' if dir_val == 'D' else 'ASC'
+                        new_entries.append({
+                            'field': col['name'],
+                            'dir': direction,
+                            'seq': seq_num,
+                        })
+                except ValueError:
+                    pass  # Ignore invalid sequence numbers
+
+        # Merge and sort all entries
+        qry_orderby.extend(new_entries)
+        qry_orderby.sort(key=lambda x: x['seq'])
+
+        # Re-sequence to 1, 2, 3...
+        for i, entry in enumerate(qry_orderby):
+            entry['seq'] = i + 1
+
+        session.field_values['qry_orderby'] = qry_orderby
+
+        sort_count = len(qry_orderby)
+        session.message = f"{sort_count} sort field(s) selected"
+        session.message_level = "info"
+
+        return self.get_screen(session, 'qrysort')
+
+    def _screen_qryrun(self, session: Session) -> dict:
+        """Run Query screen - execute and display results."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Check if running a saved query or adhoc
+        qry_run_name = session.field_values.get('qry_run_name')
+        qry_run_library = session.field_values.get('qry_run_library')
+
+        offset = session.get_offset('qryrun')
+        page_size = self.PAGE_SIZES['qryrun']
+
+        # Execute query
+        if qry_run_name and qry_run_library:
+            # Run saved query
+            success, result, columns = execute_query_definition(
+                qry_run_name, qry_run_library,
+                limit=page_size + 1,  # Extra to detect "more"
+                offset=offset
+            )
+            title = f"Query Results - {qry_run_name}"
+            query_desc = f"{qry_run_library}/{qry_run_name}"
+        else:
+            # Run adhoc query from session state
+            qry_schema = session.field_values.get('qry_schema', '')
+            qry_table = session.field_values.get('qry_table', '')
+            qry_columns = session.field_values.get('qry_columns', [])
+            qry_conditions = session.field_values.get('qry_conditions', [])
+            qry_orderby = session.field_values.get('qry_orderby', [])
+
+            if not qry_schema or not qry_table:
+                session.message = "No query defined"
+                session.message_level = "error"
+                return_screen = session.field_values.get('qry_return_screen', 'wrkqry')
+                return self.get_screen(session, return_screen)
+
+            success, result, columns = run_adhoc_query(
+                qry_schema, qry_table, qry_columns, qry_conditions, qry_orderby,
+                limit=page_size + 1,
+                offset=offset
+            )
+            title = "Query Results"
+            query_desc = f"{qry_schema}.{qry_table}"
+
+        content = []
+
+        # Header
+        content.append(pad_line(f" {hostname:<20}       {title:<28}           {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+
+        if success:
+            rows = result
+            has_more = len(rows) > page_size
+            display_rows = rows[:page_size]
+
+            content.append(pad_line(f" Query: {query_desc}   Rows: {offset + 1}-{offset + len(display_rows)}"))
+
+            # Message display
+            if session.message:
+                content.append(self._message_line(session))
+            else:
+                content.append(pad_line(""))
+
+            # Build column headers
+            if columns:
+                # Calculate column widths (max 12 chars each for 80 col display)
+                col_count = len(columns)
+                if col_count <= 6:
+                    col_width = 12
+                elif col_count <= 10:
+                    col_width = 7
+                else:
+                    col_width = 5
+
+                header_line = " "
+                for col in columns[:10]:  # Max 10 columns displayed
+                    header_line += f"{col[:col_width]:<{col_width}} "
+                content.append([{"type": "text", "text": pad_line(header_line[:79]), "class": "field-reverse"}])
+
+                # Data rows
+                for row in display_rows:
+                    data_line = " "
+                    for i, col in enumerate(columns[:10]):
+                        val = str(row.get(col, ''))[:col_width]
+                        data_line += f"{val:<{col_width}} "
+                    content.append(pad_line(data_line[:79]))
+
+            # Pad empty rows
+            for _ in range(page_size - len(display_rows)):
+                content.append(pad_line(""))
+
+            # More/Bottom indicator
+            if has_more:
+                indicator = "More..."
+            elif len(display_rows) == 0:
+                indicator = "No rows selected"
+            else:
+                indicator = "Bottom"
+        else:
+            # Error case
+            error_msg = str(result)[:70]
+            content.append(pad_line(f" Error: {error_msg}"))
+            content.append(pad_line(""))
+
+            # Pad to consistent height
+            for _ in range(page_size + 2):
+                content.append(pad_line(""))
+
+            indicator = "Error"
+
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        # Message line
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageUp/PageDown=Scroll"))
+
+        return {
+            "type": "screen",
+            "screen": "qryrun",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": -1,
+        }
+
+    def _submit_qryrun(self, session: Session, fields: dict) -> dict:
+        """Handle Run Query submission (refresh)."""
+        return self.get_screen(session, 'qryrun')

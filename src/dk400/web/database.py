@@ -373,6 +373,32 @@ INSERT INTO subsystem_job_queues (subsystem_name, job_queue, sequence, max_activ
 ON CONFLICT (subsystem_name, job_queue) DO NOTHING;
 
 -- =============================================================================
+-- Query Definitions (AS/400 *QRYDFN objects - Query/400)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS query_definitions (
+    name VARCHAR(10) NOT NULL,
+    library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    description VARCHAR(50) DEFAULT '',
+    source_schema VARCHAR(128),
+    source_table VARCHAR(128),
+    selected_columns JSONB DEFAULT '[]',       -- [{name, alias, seq}]
+    where_conditions JSONB DEFAULT '[]',       -- [{field, op, value, and_or}]
+    order_by_fields JSONB DEFAULT '[]',        -- [{field, dir, seq}]
+    output_type VARCHAR(10) DEFAULT '*DISPLAY', -- *DISPLAY, *OUTFILE, *PRINT
+    row_limit INTEGER DEFAULT 0,               -- 0 = no limit
+    created_by VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by VARCHAR(10),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_run_at TIMESTAMP,
+    PRIMARY KEY (name, library)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qrydfn_user ON query_definitions(created_by);
+CREATE INDEX IF NOT EXISTS idx_qrydfn_table ON query_definitions(source_schema, source_table);
+
+-- =============================================================================
 -- Commands (AS/400 *CMD objects)
 -- Naming follows QSYS2.COMMAND_INFO pattern from IBM i
 -- =============================================================================
@@ -3309,3 +3335,450 @@ def _populate_addjobscde_parameters():
 
     add_parameter_valid_value(cmd, 'SCDDATE', '*NONE', 'Not specified', 1)
     add_parameter_valid_value(cmd, 'SCDDATE', '*CURRENT', 'Current date', 2)
+
+
+# =============================================================================
+# Query Definitions (AS/400 Query/400 - WRKQRY)
+# =============================================================================
+
+# Operators for WHERE clause building
+QUERY_OPERATORS = {
+    'EQ': ('=', 'Equal'),
+    'NE': ('<>', 'Not Equal'),
+    'GT': ('>', 'Greater Than'),
+    'LT': ('<', 'Less Than'),
+    'GE': ('>=', 'Greater/Equal'),
+    'LE': ('<=', 'Less/Equal'),
+    'CT': ('LIKE', 'Contains'),       # Wraps value in %...%
+    'SW': ('LIKE', 'Starts With'),    # Appends % to value
+    'EW': ('LIKE', 'Ends With'),      # Prepends % to value
+    'NL': ('IS NULL', 'Is Null'),
+    'NN': ('IS NOT NULL', 'Not Null'),
+}
+
+
+def list_table_columns(schema_name: str, table_name: str) -> list[dict]:
+    """
+    List all columns in a table with metadata.
+    Used by Query/400 for column selection.
+    """
+    columns = []
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    column_name,
+                    data_type,
+                    character_maximum_length,
+                    numeric_precision,
+                    numeric_scale,
+                    is_nullable,
+                    column_default,
+                    ordinal_position
+                FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = %s
+                ORDER BY ordinal_position
+            """, (schema_name.lower(), table_name.lower()))
+
+            for row in cursor.fetchall():
+                columns.append({
+                    'name': row['column_name'].upper(),
+                    'data_type': row['data_type'],
+                    'max_length': row['character_maximum_length'],
+                    'precision': row['numeric_precision'],
+                    'scale': row['numeric_scale'],
+                    'nullable': row['is_nullable'] == 'YES',
+                    'default': row['column_default'],
+                    'ordinal': row['ordinal_position'],
+                })
+    except Exception as e:
+        logger.error(f"Failed to list columns for {schema_name}.{table_name}: {e}")
+
+    return columns
+
+
+def create_query_definition(
+    name: str,
+    library: str = 'QGPL',
+    description: str = '',
+    source_schema: str = None,
+    source_table: str = None,
+    selected_columns: list = None,
+    where_conditions: list = None,
+    order_by_fields: list = None,
+    output_type: str = '*DISPLAY',
+    row_limit: int = 0,
+    created_by: str = 'SYSTEM'
+) -> tuple[bool, str]:
+    """Create a new query definition (CRTQRY equivalent)."""
+    import json
+
+    name = name.upper().strip()[:10]
+    library = library.upper().strip()[:10] if library else 'QGPL'
+
+    if not name:
+        return False, "Query name is required"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO query_definitions (
+                    name, library, description, source_schema, source_table,
+                    selected_columns, where_conditions, order_by_fields,
+                    output_type, row_limit, created_by
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                name, library, description,
+                source_schema.lower() if source_schema else None,
+                source_table.lower() if source_table else None,
+                json.dumps(selected_columns or []),
+                json.dumps(where_conditions or []),
+                json.dumps(order_by_fields or []),
+                output_type, row_limit, created_by
+            ))
+
+        return True, f"Query {library}/{name} created"
+    except psycopg2.IntegrityError:
+        return False, f"Query {library}/{name} already exists"
+    except Exception as e:
+        logger.error(f"Failed to create query {name}: {e}")
+        return False, f"Failed to create query: {e}"
+
+
+def get_query_definition(name: str, library: str = 'QGPL') -> dict | None:
+    """Get a query definition by name."""
+    name = name.upper().strip()
+    library = library.upper().strip() if library else 'QGPL'
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM query_definitions WHERE name = %s AND library = %s",
+                (name, library)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'name': row['name'],
+                    'library': row['library'],
+                    'description': row['description'],
+                    'source_schema': row['source_schema'],
+                    'source_table': row['source_table'],
+                    'selected_columns': row['selected_columns'] or [],
+                    'where_conditions': row['where_conditions'] or [],
+                    'order_by_fields': row['order_by_fields'] or [],
+                    'output_type': row['output_type'],
+                    'row_limit': row['row_limit'],
+                    'created_by': row['created_by'],
+                    'created_at': str(row['created_at']) if row['created_at'] else '',
+                    'updated_by': row['updated_by'],
+                    'updated_at': str(row['updated_at']) if row['updated_at'] else '',
+                    'last_run_at': str(row['last_run_at']) if row['last_run_at'] else '',
+                }
+    except Exception as e:
+        logger.error(f"Failed to get query {name}: {e}")
+
+    return None
+
+
+def update_query_definition(
+    name: str,
+    library: str = 'QGPL',
+    updated_by: str = 'SYSTEM',
+    **kwargs
+) -> tuple[bool, str]:
+    """Update an existing query definition."""
+    import json
+
+    name = name.upper().strip()
+    library = library.upper().strip() if library else 'QGPL'
+
+    if not get_query_definition(name, library):
+        return False, f"Query {library}/{name} not found"
+
+    # Build dynamic update
+    allowed_fields = [
+        'description', 'source_schema', 'source_table',
+        'selected_columns', 'where_conditions', 'order_by_fields',
+        'output_type', 'row_limit'
+    ]
+
+    updates = []
+    values = []
+
+    for field in allowed_fields:
+        if field in kwargs:
+            val = kwargs[field]
+            if field in ('selected_columns', 'where_conditions', 'order_by_fields'):
+                val = json.dumps(val or [])
+            elif field in ('source_schema', 'source_table') and val:
+                val = val.lower()
+            updates.append(f"{field} = %s")
+            values.append(val)
+
+    if not updates:
+        return False, "No fields to update"
+
+    updates.append("updated_by = %s")
+    values.append(updated_by)
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+
+    values.extend([name, library])
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE query_definitions
+                SET {', '.join(updates)}
+                WHERE name = %s AND library = %s
+            """, values)
+
+        return True, f"Query {library}/{name} updated"
+    except Exception as e:
+        logger.error(f"Failed to update query {name}: {e}")
+        return False, f"Failed to update query: {e}"
+
+
+def delete_query_definition(name: str, library: str = 'QGPL') -> tuple[bool, str]:
+    """Delete a query definition (DLTQRY equivalent)."""
+    name = name.upper().strip()
+    library = library.upper().strip() if library else 'QGPL'
+
+    if not get_query_definition(name, library):
+        return False, f"Query {library}/{name} not found"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM query_definitions WHERE name = %s AND library = %s",
+                (name, library)
+            )
+
+        return True, f"Query {library}/{name} deleted"
+    except Exception as e:
+        logger.error(f"Failed to delete query {name}: {e}")
+        return False, f"Failed to delete query: {e}"
+
+
+def list_query_definitions(library: str = None, created_by: str = None) -> list[dict]:
+    """List query definitions with optional filters."""
+    queries = []
+    try:
+        with get_cursor() as cursor:
+            sql = "SELECT * FROM query_definitions WHERE 1=1"
+            params = []
+
+            if library:
+                sql += " AND library = %s"
+                params.append(library.upper())
+
+            if created_by:
+                sql += " AND created_by = %s"
+                params.append(created_by.upper())
+
+            sql += " ORDER BY library, name"
+
+            cursor.execute(sql, params)
+
+            for row in cursor.fetchall():
+                queries.append({
+                    'name': row['name'],
+                    'library': row['library'],
+                    'description': row['description'],
+                    'source_schema': row['source_schema'],
+                    'source_table': row['source_table'],
+                    'created_by': row['created_by'],
+                    'created_at': str(row['created_at']) if row['created_at'] else '',
+                    'last_run_at': str(row['last_run_at']) if row['last_run_at'] else '',
+                })
+    except Exception as e:
+        logger.error(f"Failed to list queries: {e}")
+
+    return queries
+
+
+def build_query_sql(
+    schema: str,
+    table: str,
+    columns: list = None,
+    conditions: list = None,
+    order_by: list = None,
+    limit: int = 100,
+    offset: int = 0
+) -> tuple:
+    """
+    Build a parameterized SQL query from query definition components.
+    Uses psycopg2.sql module for safe identifier handling.
+
+    Returns: (sql_composed_object, params_list)
+    """
+    from psycopg2 import sql as psql
+
+    # Build table reference
+    table_ref = psql.SQL("{}.{}").format(
+        psql.Identifier(schema.lower()),
+        psql.Identifier(table.lower())
+    )
+
+    # Build column list
+    if columns and len(columns) > 0:
+        col_list = psql.SQL(", ").join([
+            psql.Identifier(c['name'].lower()) for c in sorted(columns, key=lambda x: x.get('seq', 0))
+        ])
+    else:
+        col_list = psql.SQL("*")
+
+    # Start building query
+    query = psql.SQL("SELECT {} FROM {}").format(col_list, table_ref)
+
+    # Build WHERE clause
+    params = []
+    if conditions and len(conditions) > 0:
+        where_parts = []
+        for i, cond in enumerate(conditions):
+            col = psql.Identifier(cond['field'].lower())
+            op_code = cond.get('op', 'EQ')
+            op_sql, _ = QUERY_OPERATORS.get(op_code, ('=', 'Equal'))
+            value = cond.get('value', '')
+
+            if op_code == 'NL':
+                where_parts.append(psql.SQL("{} IS NULL").format(col))
+            elif op_code == 'NN':
+                where_parts.append(psql.SQL("{} IS NOT NULL").format(col))
+            elif op_code == 'CT':
+                where_parts.append(psql.SQL("{} LIKE %s").format(col))
+                params.append(f"%{value}%")
+            elif op_code == 'SW':
+                where_parts.append(psql.SQL("{} LIKE %s").format(col))
+                params.append(f"{value}%")
+            elif op_code == 'EW':
+                where_parts.append(psql.SQL("{} LIKE %s").format(col))
+                params.append(f"%{value}")
+            else:
+                where_parts.append(psql.SQL("{} {} %s").format(col, psql.SQL(op_sql)))
+                params.append(value)
+
+        # Join with AND/OR connectors
+        if len(where_parts) == 1:
+            query = query + psql.SQL(" WHERE ") + where_parts[0]
+        else:
+            # Build with connectors
+            where_sql = where_parts[0]
+            for i in range(1, len(where_parts)):
+                connector = conditions[i - 1].get('and_or', 'AND').upper()
+                if connector not in ('AND', 'OR'):
+                    connector = 'AND'
+                where_sql = where_sql + psql.SQL(" {} ").format(psql.SQL(connector)) + where_parts[i]
+            query = query + psql.SQL(" WHERE ") + where_sql
+
+    # Build ORDER BY clause
+    if order_by and len(order_by) > 0:
+        order_parts = []
+        for o in sorted(order_by, key=lambda x: x.get('seq', 0)):
+            direction = 'DESC' if o.get('dir', 'ASC').upper() == 'DESC' else 'ASC'
+            order_parts.append(
+                psql.SQL("{} {}").format(
+                    psql.Identifier(o['field'].lower()),
+                    psql.SQL(direction)
+                )
+            )
+        query = query + psql.SQL(" ORDER BY ") + psql.SQL(", ").join(order_parts)
+
+    # Add LIMIT/OFFSET
+    if limit > 0:
+        query = query + psql.SQL(" LIMIT %s OFFSET %s")
+        params.extend([limit, offset])
+
+    return query, params
+
+
+def execute_query_definition(
+    name: str,
+    library: str = 'QGPL',
+    limit: int = 100,
+    offset: int = 0
+) -> tuple[bool, list | str, list]:
+    """
+    Execute a saved query definition.
+
+    Returns: (success, rows_or_error_message, column_names)
+    """
+    qry = get_query_definition(name, library)
+    if not qry:
+        return False, f"Query {library}/{name} not found", []
+
+    if not qry['source_schema'] or not qry['source_table']:
+        return False, "Query has no table specified", []
+
+    try:
+        query_sql, params = build_query_sql(
+            schema=qry['source_schema'],
+            table=qry['source_table'],
+            columns=qry['selected_columns'],
+            conditions=qry['where_conditions'],
+            order_by=qry['order_by_fields'],
+            limit=qry['row_limit'] if qry['row_limit'] > 0 else limit,
+            offset=offset
+        )
+
+        with get_cursor() as cursor:
+            cursor.execute(query_sql, params)
+            rows = cursor.fetchall()
+
+            # Get column names from cursor description
+            col_names = [desc[0].upper() for desc in cursor.description] if cursor.description else []
+
+            # Update last_run_at
+            cursor.execute("""
+                UPDATE query_definitions
+                SET last_run_at = CURRENT_TIMESTAMP
+                WHERE name = %s AND library = %s
+            """, (name.upper(), library.upper()))
+
+        return True, [dict(row) for row in rows], col_names
+
+    except Exception as e:
+        logger.error(f"Failed to execute query {name}: {e}")
+        return False, str(e), []
+
+
+def run_adhoc_query(
+    schema: str,
+    table: str,
+    columns: list = None,
+    conditions: list = None,
+    order_by: list = None,
+    limit: int = 100,
+    offset: int = 0
+) -> tuple[bool, list | str, list]:
+    """
+    Run an ad-hoc query without saving definition.
+    Used for query preview (F5) before saving.
+
+    Returns: (success, rows_or_error_message, column_names)
+    """
+    if not schema or not table:
+        return False, "Schema and table are required", []
+
+    try:
+        query_sql, params = build_query_sql(
+            schema=schema,
+            table=table,
+            columns=columns,
+            conditions=conditions,
+            order_by=order_by,
+            limit=limit,
+            offset=offset
+        )
+
+        with get_cursor() as cursor:
+            cursor.execute(query_sql, params)
+            rows = cursor.fetchall()
+
+            col_names = [desc[0].upper() for desc in cursor.description] if cursor.description else []
+
+        return True, [dict(row) for row in rows], col_names
+
+    except Exception as e:
+        logger.error(f"Failed to run ad-hoc query: {e}")
+        return False, str(e), []
