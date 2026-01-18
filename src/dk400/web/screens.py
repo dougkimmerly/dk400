@@ -60,6 +60,9 @@ from src.dk400.web.database import (
     # Libraries
     list_libraries, create_library, delete_library, get_library,
     library_exists, get_library_objects,
+    # Library List (*LIBL support)
+    get_user_library_list, get_user_current_library,
+    resolve_library, resolve_library_for_create,
     # Database utilities
     get_cursor,
 )
@@ -136,6 +139,8 @@ class Session:
     session_id: str
     user: str = "QUSER"
     user_class: str = "*USER"  # *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER
+    current_library: str = "QGPL"  # Where new objects are created with *LIBL
+    library_list: list = field(default_factory=lambda: ['QGPL', 'QSYS'])  # Libraries to search for *LIBL
     current_screen: str = "signon"
     field_values: dict = field(default_factory=dict)
     message: str = ""
@@ -760,6 +765,11 @@ class ScreenManager:
         user_profile = user_manager.get_user(user)
         session.user = user
         session.user_class = user_profile.user_class if user_profile else "*USER"
+
+        # Load library list settings
+        session.library_list = get_user_library_list(user)
+        session.current_library = get_user_current_library(user)
+
         session.message = ""  # Clear any previous error message
 
         return self.get_screen(session, 'main')
@@ -5818,8 +5828,8 @@ class ScreenManager:
         """Work with Query Definitions screen - list saved queries."""
         hostname, date_str, time_str = get_system_info()
 
-        # Get query definitions, optionally filter by user
-        queries = list_query_definitions()
+        # Get query definitions from user's library list (*LIBL)
+        queries = list_query_definitions(library='*LIBL', username=session.user)
         offset = session.get_offset('wrkqry')
         page_size = self.PAGE_SIZES['wrkqry']
 
@@ -5936,8 +5946,8 @@ class ScreenManager:
             session.field_values['qry_library'] = new_lib
             return self.get_screen(session, 'qrydefine')
 
-        # Get current page of queries
-        queries = list_query_definitions()
+        # Get current page of queries from user's library list
+        queries = list_query_definitions(library='*LIBL', username=session.user)
         offset = session.get_offset('wrkqry')
         page_size = self.PAGE_SIZES['wrkqry']
         page_queries = queries[offset:offset + page_size - 1]  # -1 for creation row
@@ -6000,7 +6010,7 @@ class ScreenManager:
 
         mode = session.field_values.get('qry_mode', 'create')
         qry_name = session.field_values.get('qry_name', '')
-        qry_library = session.field_values.get('qry_library', 'QGPL')
+        qry_library = session.field_values.get('qry_library', '*LIBL')
         qry_desc = session.field_values.get('qry_desc', '')
         qry_schema = session.field_values.get('qry_schema', '')
         qry_table = session.field_values.get('qry_table', '')
@@ -6155,7 +6165,7 @@ class ScreenManager:
 
         # Update session values from fields
         qry_name = fields.get('name', '').strip().upper()
-        qry_library = fields.get('library', 'QGPL').strip().upper() or 'QGPL'
+        qry_library = fields.get('library', '*LIBL').strip().upper() or '*LIBL'
         qry_desc = fields.get('desc', '').strip()
 
         # Save field values to session
@@ -6225,7 +6235,7 @@ class ScreenManager:
         if fields.get('name'):
             session.field_values['qry_name'] = fields.get('name', '').strip().upper()
         if fields.get('library'):
-            session.field_values['qry_library'] = fields.get('library', 'QGPL').strip().upper() or 'QGPL'
+            session.field_values['qry_library'] = fields.get('library', '*LIBL').strip().upper() or '*LIBL'
         if fields.get('desc'):
             session.field_values['qry_desc'] = fields.get('desc', '').strip()
 
@@ -6247,7 +6257,9 @@ class ScreenManager:
         elif key == 'F10':
             # Save query
             qry_name = session.field_values.get('qry_name', '').strip().upper()
-            qry_library = session.field_values.get('qry_library', 'QGPL').strip().upper()
+            qry_library_input = session.field_values.get('qry_library', '*LIBL').strip().upper()
+            # Resolve *LIBL to actual library for saving
+            qry_library = resolve_library_for_create(qry_library_input, session.user)
 
             if not qry_name:
                 session.message = "Query name is required to save"

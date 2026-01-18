@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS qsys.users (
     status VARCHAR(10) DEFAULT '*ENABLED',
     description VARCHAR(50) DEFAULT '',
     group_profile VARCHAR(10) DEFAULT '*NONE',
+    current_library VARCHAR(10) DEFAULT 'QGPL',
+    library_list JSONB DEFAULT '["QGPL", "QSYS"]',
     created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_signon TIMESTAMP,
     signon_attempts INTEGER DEFAULT 0,
@@ -385,6 +387,9 @@ def init_database() -> bool:
         # Migrate data from public to qsys (for upgrades from older versions)
         _migrate_public_to_qsys()
 
+        # Add library list columns to users (for upgrades)
+        _add_library_list_columns()
+
         # Migrate existing objects to library schemas
         _migrate_objects_to_libraries()
 
@@ -463,6 +468,25 @@ def _migrate_public_to_qsys():
         logger.info("Public to qsys migration completed")
     except Exception as e:
         logger.warning(f"Public to qsys migration: {e}")
+
+
+def _add_library_list_columns():
+    """Add current_library and library_list columns to existing users table."""
+    try:
+        with get_cursor(dict_cursor=False) as cursor:
+            # Add current_library column if not exists
+            cursor.execute("""
+                ALTER TABLE qsys.users
+                ADD COLUMN IF NOT EXISTS current_library VARCHAR(10) DEFAULT 'QGPL'
+            """)
+            # Add library_list column if not exists
+            cursor.execute("""
+                ALTER TABLE qsys.users
+                ADD COLUMN IF NOT EXISTS library_list JSONB DEFAULT '["QGPL", "QSYS"]'
+            """)
+        logger.info("Library list columns added to users table")
+    except Exception as e:
+        logger.warning(f"Adding library list columns: {e}")
 
 
 def _create_default_system_objects():
@@ -1899,6 +1923,131 @@ def get_group_members(group_profile: str) -> list[str]:
         logger.error(f"Failed to get group members: {e}")
 
     return members
+
+
+# =============================================================================
+# Library List Functions (*LIBL support)
+# =============================================================================
+
+DEFAULT_LIBRARY_LIST = ['QGPL', 'QSYS']
+
+
+def get_user_library_list(username: str) -> list[str]:
+    """Get a user's library list. Returns default if not set."""
+    username = username.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT library_list, current_library FROM qsys.users WHERE username = %s",
+                (username,)
+            )
+            row = cursor.fetchone()
+            if row and row.get('library_list'):
+                lib_list = row['library_list']
+                if isinstance(lib_list, list):
+                    return lib_list
+                # Handle JSON string
+                import json
+                return json.loads(lib_list) if isinstance(lib_list, str) else DEFAULT_LIBRARY_LIST
+    except Exception as e:
+        logger.error(f"Failed to get library list: {e}")
+
+    return DEFAULT_LIBRARY_LIST.copy()
+
+
+def get_user_current_library(username: str) -> str:
+    """Get a user's current library (where new objects are created with *LIBL)."""
+    username = username.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT current_library FROM qsys.users WHERE username = %s",
+                (username,)
+            )
+            row = cursor.fetchone()
+            if row and row.get('current_library'):
+                return row['current_library']
+    except Exception as e:
+        logger.error(f"Failed to get current library: {e}")
+
+    return 'QGPL'
+
+
+def set_user_library_list(username: str, library_list: list[str]) -> tuple[bool, str]:
+    """Set a user's library list."""
+    username = username.upper().strip()
+    # Uppercase all library names
+    library_list = [lib.upper().strip() for lib in library_list]
+
+    try:
+        import json
+        with get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE qsys.users SET library_list = %s WHERE username = %s",
+                (json.dumps(library_list), username)
+            )
+        return True, f"Library list updated for {username}"
+    except Exception as e:
+        logger.error(f"Failed to set library list: {e}")
+        return False, str(e)
+
+
+def set_user_current_library(username: str, library: str) -> tuple[bool, str]:
+    """Set a user's current library."""
+    username = username.upper().strip()
+    library = library.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE qsys.users SET current_library = %s WHERE username = %s",
+                (library, username)
+            )
+        return True, f"Current library set to {library} for {username}"
+    except Exception as e:
+        logger.error(f"Failed to set current library: {e}")
+        return False, str(e)
+
+
+def resolve_library(library: str, username: str) -> list[str]:
+    """
+    Resolve a library specification to actual library names.
+
+    Args:
+        library: Library name or '*LIBL' to search library list
+        username: User whose library list to use for *LIBL
+
+    Returns:
+        List of library names to search (single item for specific library,
+        multiple for *LIBL)
+    """
+    library = library.upper().strip() if library else '*LIBL'
+
+    if library == '*LIBL':
+        return get_user_library_list(username)
+    else:
+        return [library]
+
+
+def resolve_library_for_create(library: str, username: str) -> str:
+    """
+    Resolve a library specification for creating a new object.
+
+    Args:
+        library: Library name or '*LIBL'
+        username: User whose current library to use for *LIBL
+
+    Returns:
+        Single library name where object should be created
+    """
+    library = library.upper().strip() if library else '*LIBL'
+
+    if library == '*LIBL':
+        return get_user_current_library(username)
+    else:
+        return library
 
 
 def get_effective_authorities(username: str) -> list[dict]:
@@ -4243,17 +4392,30 @@ def delete_query_definition(name: str, library: str = 'QGPL') -> tuple[bool, str
         return False, f"Failed to delete query: {e}"
 
 
-def list_query_definitions(library: str = None, created_by: str = None) -> list[dict]:
+def list_query_definitions(library: str = None, created_by: str = None, username: str = None) -> list[dict]:
     """List query definitions with optional filters.
 
-    If library is specified, queries only that library's _qrydfn table.
-    If library is None, queries all libraries' _qrydfn tables.
+    Args:
+        library: Library to search. Can be:
+            - None: Search all libraries
+            - '*LIBL': Search user's library list (requires username)
+            - Specific name: Search only that library
+        created_by: Filter by creator username
+        username: User for *LIBL resolution
+
+    Returns:
+        List of query definition dicts
     """
     queries = []
 
     # Get list of libraries to query
     if library:
-        libraries = [library.upper()]
+        library = library.upper().strip()
+        if library == '*LIBL' and username:
+            # Resolve *LIBL to user's library list
+            libraries = get_user_library_list(username)
+        else:
+            libraries = [library]
     else:
         libraries = [lib['name'] for lib in list_libraries()]
 
