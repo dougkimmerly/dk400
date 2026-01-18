@@ -5082,7 +5082,7 @@ class ScreenManager:
         for i, s in enumerate(sbsds):
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
-                {"type": "text", "text": f"  {s['name']:<10} {s['status']:<10} {s.get('worker_concurrency', 0):>5}    {s.get('celery_queue', ''):<15} {s['description'][:15]}"},
+                {"type": "text", "text": f"  {s['name']:<10} {s['status']:<10} {s.get('worker_concurrency', 0):>5}    {(s.get('celery_queue') or ''):<15} {(s.get('description') or '')[:15]}"},
             ]
             content.append(row)
             fields.append({"id": f"opt_{i}"})
