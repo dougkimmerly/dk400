@@ -13,6 +13,10 @@ import socket
 
 from src.dk400.tui.screens.wrkactjob import WrkActJobScreen
 from src.dk400.tui.screens.dspsyssts import DspSysStsScreen
+from src.dk400.tui.screens.wrkjobq import WrkJobQScreen
+from src.dk400.tui.screens.wrksvc import WrkSvcScreen
+from src.dk400.tui.screens.dsplog import DspLogScreen
+from src.dk400.tui.screens.sbmjob import SbmJobScreen
 
 
 LOGO = r"""
@@ -388,20 +392,24 @@ class MainMenuScreen(Screen):
         self.app.push_screen("wrkactjob")
 
     def action_wrkjobq(self) -> None:
-        self._show_message("WRKJOBQ - Coming soon")
+        """Work with job queues."""
+        self.app.push_screen("wrkjobq")
 
     def action_wrksvc(self) -> None:
-        self._show_message("WRKSVC - Coming soon")
+        """Work with services."""
+        self.app.push_screen("wrksvc")
 
     def action_dspsyssts(self) -> None:
         """Display system status."""
         self.app.push_screen("dspsyssts")
 
     def action_dsplog(self) -> None:
-        self._show_message("DSPLOG - Coming soon")
+        """Display log."""
+        self.app.push_screen("dsplog")
 
     def action_sbmjob(self) -> None:
-        self._show_message("SBMJOB - Coming soon")
+        """Submit job."""
+        self.app.push_screen("sbmjob")
 
 
 class DK400App(App):
@@ -426,6 +434,10 @@ class DK400App(App):
         "main": MainMenuScreen,
         "wrkactjob": WrkActJobScreen,
         "dspsyssts": DspSysStsScreen,
+        "wrkjobq": WrkJobQScreen,
+        "wrksvc": WrkSvcScreen,
+        "dsplog": DspLogScreen,
+        "sbmjob": SbmJobScreen,
     }
 
     def __init__(self):
