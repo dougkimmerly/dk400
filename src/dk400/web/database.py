@@ -34,14 +34,25 @@ CREATE TABLE IF NOT EXISTS users (
     user_class VARCHAR(10) DEFAULT '*USER',
     status VARCHAR(10) DEFAULT '*ENABLED',
     description VARCHAR(50) DEFAULT '',
+    group_profile VARCHAR(10) DEFAULT '*NONE',
     created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_signon TIMESTAMP,
     signon_attempts INTEGER DEFAULT 0,
     password_expires VARCHAR(10) DEFAULT '*NOMAX'
 );
 
+-- Add group_profile column if it doesn't exist (for existing databases)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'users' AND column_name = 'group_profile') THEN
+        ALTER TABLE users ADD COLUMN group_profile VARCHAR(10) DEFAULT '*NONE';
+    END IF;
+END $$;
+
 -- Index for faster lookups
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
+CREATE INDEX IF NOT EXISTS idx_users_group ON users(group_profile);
 
 -- Job history table (for future use)
 CREATE TABLE IF NOT EXISTS job_history (
@@ -986,3 +997,239 @@ def list_schema_tables(schema_name: str) -> list[dict]:
     except Exception as e:
         logger.error(f"Failed to list tables in {schema_name}: {e}")
     return tables
+
+
+# =============================================================================
+# Group Profile Management (AS/400-style GRPPRF)
+# =============================================================================
+
+def set_group_profile(username: str, group_profile: str) -> tuple[bool, str]:
+    """
+    Set a user's group profile. The user inherits all authorities from the group.
+    Uses PostgreSQL role inheritance (GRANT role TO role).
+    """
+    username = username.upper().strip()
+    group_profile = group_profile.upper().strip()
+    role_name = username.lower()
+    group_role = group_profile.lower()
+
+    if group_profile == '*NONE':
+        # Remove from any current group
+        return remove_from_group(username)
+
+    # Verify the group user exists
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("SELECT 1 FROM users WHERE username = %s", (group_profile,))
+            if not cursor.fetchone():
+                return False, f"Group profile {group_profile} not found"
+    except Exception as e:
+        return False, f"Failed to verify group profile: {e}"
+
+    # Check if roles exist
+    if not role_exists(username):
+        return False, f"User {username} does not have a PostgreSQL role"
+
+    if not role_exists(group_profile):
+        return False, f"Group profile {group_profile} does not have a PostgreSQL role"
+
+    try:
+        conn = get_connection()
+        conn.autocommit = True
+        cursor = conn.cursor()
+
+        try:
+            # First, revoke any existing group membership
+            cursor.execute("""
+                SELECT r.rolname
+                FROM pg_roles r
+                JOIN pg_auth_members m ON r.oid = m.roleid
+                JOIN pg_roles member ON member.oid = m.member
+                WHERE member.rolname = %s AND r.rolname != 'dk400'
+            """, (role_name,))
+            for row in cursor.fetchall():
+                old_group = row['rolname']
+                cursor.execute(
+                    sql.SQL("REVOKE {} FROM {}").format(
+                        sql.Identifier(old_group),
+                        sql.Identifier(role_name)
+                    )
+                )
+
+            # Grant new group membership (role inherits from group)
+            cursor.execute(
+                sql.SQL("GRANT {} TO {}").format(
+                    sql.Identifier(group_role),
+                    sql.Identifier(role_name)
+                )
+            )
+
+            # Update users table
+            cursor.execute(
+                "UPDATE users SET group_profile = %s WHERE username = %s",
+                (group_profile, username)
+            )
+
+            logger.info(f"Set group profile for {username} to {group_profile}")
+            return True, f"User {username} now inherits from {group_profile}"
+
+        finally:
+            cursor.close()
+            conn.close()
+
+    except Exception as e:
+        logger.error(f"Failed to set group profile: {e}")
+        return False, f"Failed to set group profile: {e}"
+
+
+def remove_from_group(username: str) -> tuple[bool, str]:
+    """Remove a user from their current group profile."""
+    username = username.upper().strip()
+    role_name = username.lower()
+
+    try:
+        conn = get_connection()
+        conn.autocommit = True
+        cursor = conn.cursor()
+
+        try:
+            # Find and revoke current group memberships
+            cursor.execute("""
+                SELECT r.rolname
+                FROM pg_roles r
+                JOIN pg_auth_members m ON r.oid = m.roleid
+                JOIN pg_roles member ON member.oid = m.member
+                WHERE member.rolname = %s AND r.rolname != 'dk400'
+            """, (role_name,))
+
+            for row in cursor.fetchall():
+                old_group = row['rolname']
+                cursor.execute(
+                    sql.SQL("REVOKE {} FROM {}").format(
+                        sql.Identifier(old_group),
+                        sql.Identifier(role_name)
+                    )
+                )
+
+            # Update users table
+            cursor.execute(
+                "UPDATE users SET group_profile = '*NONE' WHERE username = %s",
+                (username,)
+            )
+
+            return True, f"User {username} removed from group"
+
+        finally:
+            cursor.close()
+            conn.close()
+
+    except Exception as e:
+        logger.error(f"Failed to remove from group: {e}")
+        return False, f"Failed to remove from group: {e}"
+
+
+def copy_authorities_from(source_user: str, target_user: str) -> tuple[bool, str]:
+    """
+    Copy all object authorities from one user to another.
+    This copies the entries from object_authorities table and applies the grants.
+    """
+    source_user = source_user.upper().strip()
+    target_user = target_user.upper().strip()
+
+    if not role_exists(source_user):
+        return False, f"Source user {source_user} does not have a PostgreSQL role"
+
+    if not role_exists(target_user):
+        return False, f"Target user {target_user} does not have a PostgreSQL role"
+
+    try:
+        # Get all authorities for source user
+        authorities = get_object_authorities(username=source_user)
+
+        if not authorities:
+            return True, f"No authorities to copy from {source_user}"
+
+        copied = 0
+        for auth in authorities:
+            success, msg = grant_object_authority(
+                object_type=auth['object_type'],
+                object_name=auth['object_name'],
+                username=target_user,
+                authority=auth['authority'],
+                granted_by=f"COPY:{source_user}"
+            )
+            if success:
+                copied += 1
+
+        return True, f"Copied {copied} authorities from {source_user} to {target_user}"
+
+    except Exception as e:
+        logger.error(f"Failed to copy authorities: {e}")
+        return False, f"Failed to copy authorities: {e}"
+
+
+def get_user_group(username: str) -> str:
+    """Get a user's group profile."""
+    username = username.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT group_profile FROM users WHERE username = %s",
+                (username,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return row['group_profile'] or '*NONE'
+    except Exception as e:
+        logger.error(f"Failed to get group profile: {e}")
+
+    return '*NONE'
+
+
+def get_group_members(group_profile: str) -> list[str]:
+    """Get all users that belong to a group profile."""
+    group_profile = group_profile.upper().strip()
+    members = []
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT username FROM users WHERE group_profile = %s ORDER BY username",
+                (group_profile,)
+            )
+            for row in cursor.fetchall():
+                members.append(row['username'])
+    except Exception as e:
+        logger.error(f"Failed to get group members: {e}")
+
+    return members
+
+
+def get_effective_authorities(username: str) -> list[dict]:
+    """
+    Get all effective authorities for a user, including inherited from group profile.
+    """
+    username = username.upper().strip()
+
+    # Get direct authorities
+    direct = get_object_authorities(username=username)
+
+    # Get group profile
+    group = get_user_group(username)
+
+    if group and group != '*NONE':
+        # Get inherited authorities from group
+        inherited = get_object_authorities(username=group)
+        for auth in inherited:
+            auth['inherited_from'] = group
+            # Check if not already in direct (direct overrides inherited)
+            exists = any(
+                d['object_type'] == auth['object_type'] and
+                d['object_name'] == auth['object_name']
+                for d in direct
+            )
+            if not exists:
+                direct.append(auth)
+
+    return direct

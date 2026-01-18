@@ -16,7 +16,7 @@ from src.dk400.web.users import user_manager, UserProfile
 from src.dk400.web.database import (
     create_schema, drop_schema, list_schemas, list_schema_tables,
     grant_object_authority, revoke_object_authority, get_object_authorities,
-    AUTHORITY_GRANTS
+    get_effective_authorities, get_user_group, AUTHORITY_GRANTS
 )
 
 
@@ -103,6 +103,8 @@ class ScreenManager:
         'WRKALR': 'wrkalr',
         'WRKNETDEV': 'wrknetdev',
         'WRKUSRPRF': 'wrkusrprf',
+        'CRTUSRPRF': 'user_create',
+        'DSPUSRAUT': 'user_authorities',
         # Schema and object authority commands
         'WRKSCHEMA': 'wrkschema',
         'WRKLIB': 'wrkschema',  # AS/400 alias
@@ -2360,7 +2362,7 @@ class ScreenManager:
         content.append(pad_line(f"                                                       {date_str}  {time_str}"))
         content.append(pad_line(""))
         content.append(pad_line("  Type options, press Enter."))
-        content.append(pad_line("    2=Change   3=Copy   4=Delete   5=Display   7=Rename   8=CHGPWD"))
+        content.append(pad_line("    2=Change   3=Copy   4=Delete   5=Display   7=Rename   8=CHGPWD   12=Auth"))
         content.append(pad_line(""))
 
         # Column headers
@@ -2445,6 +2447,9 @@ class ScreenManager:
                 elif opt == '8':  # Change Password
                     session.field_values['selected_user'] = user.username
                     return self.get_screen(session, 'user_chgpwd')
+                elif opt == '12':  # Authorities
+                    session.field_values['selected_user'] = user.username
+                    return self.get_screen(session, 'user_authorities')
                 else:
                     session.message = f"Option {opt} not valid"
                     session.message_level = "error"
@@ -2479,6 +2484,7 @@ class ScreenManager:
         content.append(pad_line(f"    User profile  . . . . . . . . . :   {user.username}"))
         content.append(pad_line(f"    Status  . . . . . . . . . . . . :   {user.status}"))
         content.append(pad_line(f"    User class  . . . . . . . . . . :   {user.user_class}"))
+        content.append(pad_line(f"    Group profile . . . . . . . . . :   {user.group_profile}"))
         content.append(pad_line(f"    Description . . . . . . . . . . :   {user.description}"))
         content.append(pad_line(""))
         content.append(pad_line(f"    Created . . . . . . . . . . . . :   {user.created}"))
@@ -2492,12 +2498,79 @@ class ScreenManager:
         content.append(pad_line(""))
         content.append(pad_line(""))
         content.append(pad_line(""))
-        content.append(pad_line(""))
         content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
             "screen": "user_display",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
+    def _screen_user_authorities(self, session: Session) -> dict:
+        """Display User Authorities screen - shows all object authorities for a user."""
+        hostname, date_str, time_str = get_system_info()
+        username = session.field_values.get('selected_user', session.user)
+        user = user_manager.get_user(username)
+
+        if not user:
+            session.message = f"User {username} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkusrprf')
+
+        # Get effective authorities (direct + inherited from group)
+        authorities = get_effective_authorities(username)
+        group_profile = user.group_profile
+
+        content = []
+
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Display User Authorities                             {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line(f"    User profile  . . . . . . . . . :   {username}"))
+        content.append(pad_line(f"    Group profile . . . . . . . . . :   {group_profile}"))
+        content.append(pad_line(""))
+
+        if group_profile and group_profile != '*NONE':
+            content.append(pad_line(f"    (Authorities inherited from {group_profile} shown with *)"))
+            content.append(pad_line(""))
+
+        # Column headers
+        content.append(pad_line("  Object Type    Object Name                    Authority"))
+        content.append(pad_line("  -----------    ------------------------------ ---------"))
+
+        # List authorities (paginated)
+        offset = session.get_offset('user_authorities')
+        page_size = 8
+        page_auths = authorities[offset:offset + page_size]
+
+        for auth in page_auths:
+            obj_type = auth['object_type'][:12].ljust(12)
+            obj_name = auth['object_name'][:30].ljust(30)
+            authority = auth['authority']
+            inherited = auth.get('inherited_from', '')
+            marker = '*' if inherited else ' '
+            content.append(pad_line(f"  {obj_type}   {obj_name} {authority}{marker}"))
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_auths)):
+            content.append(pad_line(""))
+
+        # Footer
+        more = "More..." if len(authorities) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel  PgUp/PgDn=Scroll"))
+
+        return {
+            "type": "screen",
+            "screen": "user_authorities",
             "cols": 80,
             "content": content,
             "fields": [],
@@ -2641,15 +2714,21 @@ class ScreenManager:
             {"type": "input", "id": "user_class", "width": 10, "value": "*USER"},
         ])
         content.append([
+            {"type": "text", "text": "    Group profile . . . . . . . . . :   "},
+            {"type": "input", "id": "group_profile", "width": 10, "value": "*NONE"},
+        ])
+        content.append([
             {"type": "text", "text": "    Description . . . . . . . . . . :   "},
             {"type": "input", "id": "description", "width": 30, "value": ""},
         ])
+        content.append([
+            {"type": "text", "text": "    Copy authorities from . . . . . :   "},
+            {"type": "input", "id": "copy_from", "width": 10, "value": ""},
+        ])
         content.append(pad_line(""))
         content.append(pad_line("    Valid classes: *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER"))
-        content.append(pad_line(""))
-        content.append(pad_line(""))
-        content.append(pad_line(""))
-        content.append(pad_line(""))
+        content.append(pad_line("    Group profile: User to inherit authorities from (*NONE for none)"))
+        content.append(pad_line("    Copy authorities from: Copy object authorities from this user"))
         content.append(pad_line(""))
         content.append(pad_line(" F3=Exit  F12=Cancel"))
 
@@ -2663,7 +2742,9 @@ class ScreenManager:
                 {"id": "new_pwd"},
                 {"id": "confirm_pwd"},
                 {"id": "user_class"},
+                {"id": "group_profile"},
                 {"id": "description"},
+                {"id": "copy_from"},
             ],
             "activeField": 0,
         }
@@ -2674,7 +2755,9 @@ class ScreenManager:
         new_pwd = fields.get('new_pwd', '')
         confirm_pwd = fields.get('confirm_pwd', '')
         user_class = fields.get('user_class', '*USER').strip().upper()
+        group_profile = fields.get('group_profile', '*NONE').strip().upper()
         description = fields.get('description', '').strip()
+        copy_from = fields.get('copy_from', '').strip().upper()
 
         # Validate inputs
         if not new_user:
@@ -2703,7 +2786,9 @@ class ScreenManager:
             username=new_user,
             password=new_pwd,
             user_class=user_class,
-            description=description
+            description=description,
+            group_profile=group_profile,
+            copy_from_user=copy_from
         )
 
         session.message = msg

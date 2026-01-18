@@ -13,7 +13,8 @@ from dataclasses import dataclass
 
 from src.dk400.web.database import (
     get_cursor, init_database, check_connection,
-    create_role, drop_role, update_role_password, set_role_enabled
+    create_role, drop_role, update_role_password, set_role_enabled,
+    set_group_profile, copy_authorities_from, get_user_group
 )
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class UserProfile:
     user_class: str = "*USER"  # *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER
     status: str = "*ENABLED"   # *ENABLED, *DISABLED
     description: str = ""
+    group_profile: str = "*NONE"  # Group to inherit authorities from
     created: str = ""
     last_signon: str = ""
     signon_attempts: int = 0
@@ -43,6 +45,7 @@ class UserProfile:
             user_class=row.get('user_class', '*USER'),
             status=row.get('status', '*ENABLED'),
             description=row.get('description', ''),
+            group_profile=row.get('group_profile', '*NONE'),
             created=str(row['created']) if row.get('created') else '',
             last_signon=str(row['last_signon']) if row.get('last_signon') else '',
             signon_attempts=row.get('signon_attempts', 0),
@@ -116,12 +119,25 @@ class UserManager:
         username: str,
         password: str,
         user_class: str = "*USER",
-        description: str = ""
+        description: str = "",
+        group_profile: str = "*NONE",
+        copy_from_user: str = ""
     ) -> tuple[bool, str]:
-        """Create a new user profile."""
+        """Create a new user profile.
+
+        Args:
+            username: User ID (max 10 characters)
+            password: Initial password
+            user_class: *SECOFR, *SECADM, *PGMR, *SYSOPR, or *USER
+            description: Text description
+            group_profile: User to inherit authorities from (*NONE for none)
+            copy_from_user: Copy object authorities from this user (optional)
+        """
         self._ensure_initialized()
 
         username = username.upper().strip()
+        group_profile = group_profile.upper().strip() if group_profile else "*NONE"
+        copy_from_user = copy_from_user.upper().strip() if copy_from_user else ""
 
         if not username:
             return False, "Username is required"
@@ -135,6 +151,16 @@ class UserManager:
         if not password:
             return False, "Password is required"
 
+        # Validate group profile exists if specified
+        if group_profile and group_profile != "*NONE":
+            if not self.get_user(group_profile):
+                return False, f"Group profile {group_profile} not found"
+
+        # Validate copy_from_user exists if specified
+        if copy_from_user:
+            if not self.get_user(copy_from_user):
+                return False, f"Copy from user {copy_from_user} not found"
+
         salt = self._generate_salt()
         password_hash = self._hash_password(password.upper(), salt)
 
@@ -143,8 +169,8 @@ class UserManager:
                 cursor.execute("""
                     INSERT INTO users (
                         username, password_hash, salt, user_class,
-                        status, description, created
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        status, description, group_profile, created
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     username,
                     password_hash,
@@ -152,6 +178,7 @@ class UserManager:
                     user_class,
                     '*ENABLED',
                     description,
+                    group_profile,
                     datetime.now(),
                 ))
 
@@ -159,6 +186,18 @@ class UserManager:
             role_success, role_msg = create_role(username, password.upper(), user_class)
             if not role_success:
                 logger.warning(f"User {username} created but role creation failed: {role_msg}")
+
+            # Set group profile (PostgreSQL role inheritance)
+            if group_profile and group_profile != "*NONE":
+                grp_success, grp_msg = set_group_profile(username, group_profile)
+                if not grp_success:
+                    logger.warning(f"User {username} created but group profile failed: {grp_msg}")
+
+            # Copy authorities from another user
+            if copy_from_user:
+                copy_success, copy_msg = copy_authorities_from(copy_from_user, username)
+                if not copy_success:
+                    logger.warning(f"User {username} created but copy authorities failed: {copy_msg}")
 
             return True, f"User {username} created"
         except Exception as e:
@@ -226,6 +265,27 @@ class UserManager:
         except Exception as e:
             logger.error(f"Failed to change password for {username}: {e}")
             return False, f"Failed to change password: {e}"
+
+    def change_group_profile(self, username: str, new_group: str) -> tuple[bool, str]:
+        """Change a user's group profile."""
+        self._ensure_initialized()
+
+        username = username.upper().strip()
+        new_group = new_group.upper().strip() if new_group else "*NONE"
+
+        if not self.get_user(username):
+            return False, f"User {username} not found"
+
+        # Validate new group exists if not *NONE
+        if new_group and new_group != "*NONE":
+            if not self.get_user(new_group):
+                return False, f"Group profile {new_group} not found"
+
+        # Use database function to set group profile
+        success, msg = set_group_profile(username, new_group)
+        if success:
+            return True, f"Group profile changed for {username}"
+        return False, msg
 
     def authenticate(self, username: str, password: str) -> tuple[bool, str]:
         """Authenticate a user."""
