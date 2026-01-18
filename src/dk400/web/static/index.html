@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DK/400 - AS/400 Terminal</title>
+    <link rel="stylesheet" href="/static/css/terminal.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🖥️</text></svg>">
+    <style>
+        /* Page-level styles */
+        html, body {
+            height: 100%;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+        }
+
+        /* Title bar above monitor */
+        .title-bar {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 14px;
+            letter-spacing: 2px;
+        }
+
+        .title-bar h1 {
+            font-size: 24px;
+            color: #33ff33;
+            text-shadow: 0 0 20px rgba(51, 255, 51, 0.5);
+            margin-bottom: 5px;
+        }
+
+        /* Main container */
+        #terminal {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Status indicator */
+        .connection-status {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 12px;
+            background: rgba(0,0,0,0.5);
+            color: #666;
+        }
+
+        .connection-status.connected {
+            color: #33ff33;
+        }
+
+        .connection-status.disconnected {
+            color: #ff5555;
+        }
+
+        /* Keyboard shortcuts help */
+        .keyboard-help {
+            position: fixed;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            background: rgba(0,0,0,0.7);
+            border-radius: 5px;
+            color: #666;
+            font-family: 'IBM Plex Mono', monospace;
+            font-size: 11px;
+            display: flex;
+            gap: 20px;
+        }
+
+        .keyboard-help kbd {
+            background: #333;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #33ff33;
+        }
+    </style>
+</head>
+<body>
+    <div class="title-bar">
+        <h1>DK/400</h1>
+        <span>AS/400 Job Queue System</span>
+    </div>
+
+    <div id="terminal"></div>
+
+    <div class="connection-status" id="connection-status">
+        ● Connecting...
+    </div>
+
+    <div class="keyboard-help">
+        <span><kbd>Enter</kbd> Submit</span>
+        <span><kbd>Tab</kbd> Next Field</span>
+        <span><kbd>F3</kbd> Exit</span>
+        <span><kbd>F5</kbd> Refresh</span>
+        <span><kbd>F12</kbd> Cancel</span>
+        <span><kbd>ESC</kbd> = F12</span>
+    </div>
+
+    <script src="/static/js/terminal.js"></script>
+    <script>
+        // Update connection status indicator
+        const statusEl = document.getElementById('connection-status');
+
+        // Override WebSocket handlers to update status
+        const originalConnect = Terminal5250.prototype.connect;
+        Terminal5250.prototype.connect = function() {
+            originalConnect.call(this);
+
+            this.ws.onopen = () => {
+                this.connected = true;
+                statusEl.textContent = '● Connected';
+                statusEl.className = 'connection-status connected';
+                this.send({ action: 'init' });
+            };
+
+            this.ws.onclose = () => {
+                this.connected = false;
+                statusEl.textContent = '● Disconnected';
+                statusEl.className = 'connection-status disconnected';
+                this.showMessage('Connection lost. Reconnecting...');
+                setTimeout(() => this.connect(), 3000);
+            };
+        };
+    </script>
+</body>
+</html>

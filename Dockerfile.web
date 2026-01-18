@@ -1,0 +1,30 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install Docker CLI for container management
+RUN apt-get update && apt-get install -y \
+    curl \
+    && curl -fsSL https://get.docker.com | sh \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn[standard] \
+    websockets \
+    celery \
+    redis
+
+# Copy source
+COPY src /app/src
+
+# Set Python path
+ENV PYTHONPATH=/app
+
+# Expose port
+EXPOSE 8400
+
+# Run the web server
+CMD ["uvicorn", "src.dk400.web.server:app", "--host", "0.0.0.0", "--port", "8400"]

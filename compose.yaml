@@ -77,6 +77,24 @@ services:
     stdin_open: true
     tty: true
 
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: dk400-web
+    restart: unless-stopped
+    ports:
+      - "8400:8400"
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+    volumes:
+      - ./src:/app/src:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - dk400
+    depends_on:
+      - redis
+
 networks:
   dk400:
     driver: bridge

@@ -1,0 +1,377 @@
+/* DK/400 - Authentic IBM 5250 Terminal Emulator */
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap');
+
+/* IBM 3270 style font fallback */
+@font-face {
+    font-family: '3270';
+    src: url('https://cdn.jsdelivr.net/gh/rbanffy/3270font/build/web/3270-Regular.woff2') format('woff2'),
+         url('https://cdn.jsdelivr.net/gh/rbanffy/3270font/build/web/3270-Regular.woff') format('woff');
+    font-weight: normal;
+    font-style: normal;
+}
+
+:root {
+    /* IBM 5250 phosphor colors */
+    --phosphor-green: #33ff33;
+    --phosphor-dim: #20cc20;
+    --phosphor-bright: #66ff66;
+    --phosphor-glow: rgba(51, 255, 51, 0.4);
+    --screen-black: #0a0a0a;
+    --screen-dark: #050505;
+    --field-highlight: #003300;
+    --cursor-color: #33ff33;
+    --error-red: #ff5555;
+    --warning-yellow: #ffff55;
+
+    /* Screen dimensions - 80x24 + status lines */
+    --char-width: 10px;
+    --char-height: 20px;
+    --screen-cols: 80;
+    --screen-rows: 27;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    background: #000;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+}
+
+/* CRT Monitor Frame */
+.crt-monitor {
+    position: relative;
+    background: linear-gradient(145deg, #2a2a2a 0%, #1a1a1a 50%, #0f0f0f 100%);
+    border-radius: 20px;
+    padding: 30px;
+    box-shadow:
+        0 0 50px rgba(0,0,0,0.8),
+        inset 0 0 20px rgba(0,0,0,0.5),
+        0 20px 60px rgba(0,0,0,0.6);
+}
+
+/* Monitor bezel */
+.crt-monitor::before {
+    content: '';
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    border: 3px solid #333;
+    border-radius: 15px;
+    pointer-events: none;
+}
+
+/* IBM logo badge */
+.monitor-badge {
+    position: absolute;
+    bottom: 8px;
+    right: 40px;
+    font-family: 'Arial', sans-serif;
+    font-size: 12px;
+    font-weight: bold;
+    color: #666;
+    letter-spacing: 2px;
+}
+
+/* Power LED */
+.power-led {
+    position: absolute;
+    bottom: 12px;
+    left: 40px;
+    width: 8px;
+    height: 8px;
+    background: var(--phosphor-green);
+    border-radius: 50%;
+    box-shadow: 0 0 10px var(--phosphor-green);
+    animation: led-pulse 2s ease-in-out infinite;
+}
+
+@keyframes led-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+/* Screen container with CRT curvature */
+.screen-container {
+    position: relative;
+    background: var(--screen-black);
+    border-radius: 10px;
+    overflow: hidden;
+    /* Subtle CRT curvature */
+    transform: perspective(1000px) rotateX(1deg);
+    box-shadow:
+        inset 0 0 100px rgba(0,0,0,0.9),
+        inset 0 0 20px rgba(0,0,0,0.8);
+}
+
+/* The actual terminal screen */
+.terminal-screen {
+    font-family: '3270', 'IBM Plex Mono', 'Courier New', monospace;
+    font-size: 16px;
+    line-height: var(--char-height);
+    color: var(--phosphor-green);
+    background: var(--screen-black);
+    padding: 20px;
+    width: calc(var(--char-width) * var(--screen-cols) + 40px);
+    height: calc(var(--char-height) * var(--screen-rows) + 40px);
+    position: relative;
+    /* Text glow effect */
+    text-shadow:
+        0 0 5px var(--phosphor-glow),
+        0 0 10px var(--phosphor-glow),
+        0 0 20px rgba(51, 255, 51, 0.2);
+}
+
+/* Scanlines overlay */
+.scanlines {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.15),
+        rgba(0, 0, 0, 0.15) 1px,
+        transparent 1px,
+        transparent 2px
+    );
+    pointer-events: none;
+    z-index: 10;
+}
+
+/* Screen flicker effect */
+.screen-flicker {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(51, 255, 51, 0.03);
+    pointer-events: none;
+    z-index: 9;
+    animation: flicker 0.15s infinite;
+}
+
+@keyframes flicker {
+    0% { opacity: 0.97; }
+    50% { opacity: 1; }
+    100% { opacity: 0.98; }
+}
+
+/* Vignette effect (darker edges) */
+.vignette {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(
+        ellipse at center,
+        transparent 0%,
+        transparent 60%,
+        rgba(0, 0, 0, 0.4) 100%
+    );
+    pointer-events: none;
+    z-index: 11;
+}
+
+/* Screen content area */
+.screen-content {
+    position: relative;
+    z-index: 5;
+    white-space: pre;
+    letter-spacing: 0px;
+}
+
+/* Screen rows */
+.screen-row {
+    height: var(--char-height);
+    display: block;
+}
+
+/* Input fields */
+.input-field {
+    background: transparent;
+    border: none;
+    outline: none;
+    font-family: inherit;
+    font-size: inherit;
+    color: var(--phosphor-bright);
+    caret-color: var(--cursor-color);
+    text-shadow: inherit;
+    padding: 0;
+    margin: 0;
+}
+
+.input-field:focus {
+    background: var(--field-highlight);
+}
+
+.input-field::selection {
+    background: var(--phosphor-green);
+    color: var(--screen-black);
+}
+
+/* Field types */
+.field-input {
+    color: var(--phosphor-bright);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.field-output {
+    color: var(--phosphor-green);
+}
+
+.field-protected {
+    color: var(--phosphor-dim);
+}
+
+.field-error {
+    color: var(--error-red);
+    text-shadow: 0 0 10px rgba(255, 85, 85, 0.5);
+}
+
+.field-warning {
+    color: var(--warning-yellow);
+    text-shadow: 0 0 10px rgba(255, 255, 85, 0.3);
+}
+
+.field-highlight {
+    color: var(--phosphor-bright);
+    font-weight: bold;
+}
+
+.field-reverse {
+    background: var(--phosphor-green);
+    color: var(--screen-black);
+    text-shadow: none;
+}
+
+/* Cursor */
+.cursor {
+    display: inline-block;
+    width: var(--char-width);
+    height: var(--char-height);
+    background: var(--phosphor-green);
+    animation: cursor-blink 1s step-end infinite;
+}
+
+@keyframes cursor-blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+}
+
+/* Status bar (bottom of screen) */
+.status-bar {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    right: 20px;
+    display: flex;
+    justify-content: space-between;
+    color: var(--phosphor-dim);
+    font-size: 14px;
+}
+
+/* Function key bar */
+.function-keys {
+    position: absolute;
+    bottom: 0;
+    left: 20px;
+    right: 20px;
+    padding: 5px 0;
+    display: flex;
+    gap: 10px;
+    color: var(--phosphor-dim);
+    font-size: 12px;
+    border-top: 1px solid #222;
+}
+
+.fkey {
+    cursor: pointer;
+    padding: 2px 5px;
+    transition: all 0.1s;
+}
+
+.fkey:hover {
+    color: var(--phosphor-bright);
+    text-shadow: 0 0 10px var(--phosphor-glow);
+}
+
+.fkey:active {
+    transform: scale(0.95);
+}
+
+/* Hidden actual input for capturing keystrokes */
+.hidden-input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Loading/connecting state */
+.connecting {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100%;
+    font-size: 18px;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+}
+
+/* Screen refresh flash */
+.refresh-flash {
+    animation: screen-refresh 0.1s ease-out;
+}
+
+@keyframes screen-refresh {
+    0% { filter: brightness(1.5); }
+    100% { filter: brightness(1); }
+}
+
+/* Responsive scaling */
+@media (max-width: 900px) {
+    :root {
+        --char-width: 8px;
+        --char-height: 16px;
+    }
+
+    .terminal-screen {
+        font-size: 13px;
+    }
+
+    .crt-monitor {
+        padding: 15px;
+        border-radius: 10px;
+    }
+}
+
+/* Print styles - remove effects */
+@media print {
+    .scanlines, .screen-flicker, .vignette {
+        display: none;
+    }
+
+    .terminal-screen {
+        text-shadow: none;
+        background: white;
+        color: black;
+    }
+}
