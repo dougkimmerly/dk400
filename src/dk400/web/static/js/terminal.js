@@ -211,9 +211,106 @@ class Terminal5250 {
 
         inputs.forEach((input, index) => {
             input.addEventListener('keydown', (e) => this.handleFieldKeydown(e, index));
+            input.addEventListener('input', (e) => this.handleFieldInput(e, index));
             input.addEventListener('focus', () => {
                 this.activeFieldIndex = index;
             });
+        });
+    }
+
+    /**
+     * Handle input events for auto-advance when field is full
+     */
+    handleFieldInput(e, fieldIndex) {
+        const input = e.target;
+        const maxLength = parseInt(input.getAttribute('maxlength')) || 999;
+
+        // Auto-advance to next field when current field is full
+        if (input.value.length >= maxLength) {
+            // Small delay to ensure the character is entered first
+            setTimeout(() => this.focusNextField(), 0);
+        }
+    }
+
+    /**
+     * Get the visual position (row, column) of a field on screen
+     */
+    getFieldPosition(input) {
+        const row = input.closest('.screen-row');
+        const rowIndex = row ? parseInt(row.dataset.row) : 0;
+
+        // Get horizontal position by measuring offset from row start
+        const rowRect = row ? row.getBoundingClientRect() : { left: 0 };
+        const inputRect = input.getBoundingClientRect();
+        const colOffset = inputRect.left - rowRect.left;
+
+        return { row: rowIndex, col: colOffset, element: input };
+    }
+
+    /**
+     * Find the nearest field in the specified vertical direction
+     */
+    findFieldInDirection(currentInput, direction) {
+        const inputs = Array.from(this.container.querySelectorAll('.input-field'));
+        const currentPos = this.getFieldPosition(currentInput);
+
+        // Get all fields with their positions
+        const fieldsWithPos = inputs.map((input, index) => ({
+            input,
+            index,
+            ...this.getFieldPosition(input)
+        }));
+
+        // Filter to fields in the desired direction
+        const candidates = fieldsWithPos.filter(f => {
+            if (direction === 'up') {
+                return f.row < currentPos.row;
+            } else {
+                return f.row > currentPos.row;
+            }
+        });
+
+        if (candidates.length === 0) {
+            // No field in that direction - wrap around
+            if (direction === 'up') {
+                // Go to last row
+                const maxRow = Math.max(...fieldsWithPos.map(f => f.row));
+                const lastRowFields = fieldsWithPos.filter(f => f.row === maxRow);
+                return this.findClosestByColumn(lastRowFields, currentPos.col);
+            } else {
+                // Go to first row
+                const minRow = Math.min(...fieldsWithPos.map(f => f.row));
+                const firstRowFields = fieldsWithPos.filter(f => f.row === minRow);
+                return this.findClosestByColumn(firstRowFields, currentPos.col);
+            }
+        }
+
+        // Find the closest row in that direction
+        let targetRow;
+        if (direction === 'up') {
+            targetRow = Math.max(...candidates.map(f => f.row));
+        } else {
+            targetRow = Math.min(...candidates.map(f => f.row));
+        }
+
+        // Get all fields on the target row
+        const targetRowFields = candidates.filter(f => f.row === targetRow);
+
+        // Find the one closest horizontally to current position
+        return this.findClosestByColumn(targetRowFields, currentPos.col);
+    }
+
+    /**
+     * Find the field closest to a given column position
+     */
+    findClosestByColumn(fields, targetCol) {
+        if (fields.length === 0) return null;
+        if (fields.length === 1) return fields[0];
+
+        return fields.reduce((closest, field) => {
+            const closestDist = Math.abs(closest.col - targetCol);
+            const fieldDist = Math.abs(field.col - targetCol);
+            return fieldDist < closestDist ? field : closest;
         });
     }
 
@@ -276,8 +373,12 @@ class Terminal5250 {
                     e.preventDefault();
                     this.handleRoll('up');
                 } else {
+                    // Move to field above (spatial navigation)
                     e.preventDefault();
-                    this.focusPreviousField();
+                    const upField = this.findFieldInDirection(e.target, 'up');
+                    if (upField) {
+                        this.focusField(upField.index);
+                    }
                 }
                 break;
 
@@ -287,9 +388,70 @@ class Terminal5250 {
                     e.preventDefault();
                     this.handleRoll('down');
                 } else {
+                    // Move to field below (spatial navigation)
+                    e.preventDefault();
+                    const downField = this.findFieldInDirection(e.target, 'down');
+                    if (downField) {
+                        this.focusField(downField.index);
+                    }
+                }
+                break;
+
+            case 'ArrowLeft':
+                // At start of field, move to previous field
+                if (e.target.selectionStart === 0 && e.target.selectionEnd === 0) {
+                    e.preventDefault();
+                    this.focusPreviousField();
+                    // Position cursor at end of previous field
+                    setTimeout(() => {
+                        const inputs = this.container.querySelectorAll('.input-field');
+                        const prevInput = inputs[this.activeFieldIndex];
+                        if (prevInput) {
+                            prevInput.selectionStart = prevInput.value.length;
+                            prevInput.selectionEnd = prevInput.value.length;
+                        }
+                    }, 0);
+                }
+                // Otherwise let default behavior move within field
+                break;
+
+            case 'ArrowRight':
+                // At end of field, move to next field
+                if (e.target.selectionStart === e.target.value.length) {
                     e.preventDefault();
                     this.focusNextField();
+                    // Position cursor at start of next field
+                    setTimeout(() => {
+                        const inputs = this.container.querySelectorAll('.input-field');
+                        const nextInput = inputs[this.activeFieldIndex];
+                        if (nextInput) {
+                            nextInput.selectionStart = 0;
+                            nextInput.selectionEnd = 0;
+                        }
+                    }, 0);
                 }
+                // Otherwise let default behavior move within field
+                break;
+
+            case 'Home':
+                // Move to first input field on screen
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    this.focusField(0);
+                }
+                // Without modifier, default behavior moves to start of field
+                break;
+
+            case 'End':
+                // Move to last input field on screen
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    const inputs = this.container.querySelectorAll('.input-field');
+                    if (inputs.length > 0) {
+                        this.focusField(inputs.length - 1);
+                    }
+                }
+                // Without modifier, default behavior moves to end of field
                 break;
         }
     }
