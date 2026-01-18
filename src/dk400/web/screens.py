@@ -60,7 +60,10 @@ from src.dk400.web.database import (
     # Libraries
     list_libraries, create_library, delete_library, get_library,
     library_exists, get_library_objects,
+    # Database utilities
+    get_cursor,
 )
+from psycopg2 import sql
 
 
 # Screen dimensions
@@ -169,15 +172,16 @@ class ScreenManager:
         'WRKUSRPRF': 'wrkusrprf',
         'CRTUSRPRF': 'user_create',
         'DSPUSRAUT': 'user_authorities',
-        # Schema and object authority commands (PostgreSQL schemas)
-        'WRKSCHEMA': 'wrkschema',
-        'CRTSCHEMA': 'schema_create',
+        # Schema/Library commands (PostgreSQL schemas = AS/400 libraries)
+        'WRKSCHEMA': 'wrklib',  # Merged with WRKLIB
+        'CRTSCHEMA': 'crtlib',  # Merged with CRTLIB
         # AS/400-style Libraries (library schemas)
         'WRKLIB': 'wrklib',
         'CRTLIB': 'crtlib',
         'DSPLIB': 'dsplib',
         'DLTLIB': 'dltlib',
         'WRKOBJ': 'wrkobj',
+        'DSPFD': 'dspfd',  # Display File Description (*FILE)
         'GRTOBJAUT': 'grtobjaut',
         'RVKOBJAUT': 'rvkobjaut',
         'DSPOBJAUT': 'dspobjaut',
@@ -247,13 +251,14 @@ class ScreenManager:
         'WRKUSRPRF': 'Work with User Profiles',
         'CRTUSRPRF': 'Create User Profile',
         'DSPUSRAUT': 'Display User Authorities',
-        'WRKSCHEMA': 'Work with PostgreSQL Schemas',
-        'CRTSCHEMA': 'Create PostgreSQL Schema',
+        'WRKSCHEMA': 'Work with Libraries',  # Alias for WRKLIB
+        'CRTSCHEMA': 'Create Library',  # Alias for CRTLIB
         'WRKLIB': 'Work with Libraries',
         'CRTLIB': 'Create Library',
         'DSPLIB': 'Display Library',
         'DLTLIB': 'Delete Library',
         'WRKOBJ': 'Work with Objects',
+        'DSPFD': 'Display File Description',
         'GRTOBJAUT': 'Grant Object Authority',
         'RVKOBJAUT': 'Revoke Object Authority',
         'DSPOBJAUT': 'Display Object Authority',
@@ -431,7 +436,7 @@ class ScreenManager:
                 return self.get_screen(session, 'user_create')
             elif screen == 'wrkschema':
                 # F6=Create on Work with Schemas
-                return self.get_screen(session, 'schema_create')
+                return self.get_screen(session, 'crtlib')
             elif screen == 'wrkmsgq':
                 # F6=Create on Work with Message Queues
                 return self.get_screen(session, 'crtmsgq')
@@ -508,9 +513,9 @@ class ScreenManager:
             elif screen in ('user_display', 'user_chgpwd', 'user_create', 'user_change'):
                 return self.get_screen(session, 'wrkusrprf')
             elif screen in ('schema_create', 'schema_detail', 'schema_tables'):
-                return self.get_screen(session, 'wrkschema')
+                return self.get_screen(session, 'wrklib')  # Merged with WRKLIB
             elif screen in ('grtobjaut', 'rvkobjaut', 'dspobjaut'):
-                return self.get_screen(session, 'wrkschema')
+                return self.get_screen(session, 'wrklib')  # Merged with WRKLIB
             # Message Queue screens
             elif screen in ('dspmsg', 'sndmsg', 'crtmsgq', 'msgq_detail'):
                 return self.get_screen(session, 'wrkmsgq')
@@ -541,6 +546,9 @@ class ScreenManager:
             # Library screens
             elif screen in ('crtlib', 'dsplib', 'dltlib', 'chglib', 'wrkobj'):
                 return self.get_screen(session, 'wrklib')
+            # File description (back to WRKOBJ)
+            elif screen == 'dspfd':
+                return self.get_screen(session, 'wrkobj')
             # Query screens
             elif screen == 'qrydefine':
                 return self.get_screen(session, 'wrkqry')
@@ -3523,7 +3531,7 @@ class ScreenManager:
                         success, msg = drop_schema(schema['name'])
                         session.message = msg
                         session.message_level = "info" if success else "error"
-                    return self.get_screen(session, 'wrkschema')
+                    return self.get_screen(session, 'wrklib')
                 elif opt == '5':  # Display Tables
                     session.field_values['selected_schema'] = schema['name']
                     return self.get_screen(session, 'schema_tables')
@@ -3536,13 +3544,13 @@ class ScreenManager:
                 else:
                     session.message = f"Option {opt} not valid"
                     session.message_level = "error"
-                    return self.get_screen(session, 'wrkschema')
+                    return self.get_screen(session, 'wrklib')
 
         cmd = fields.get('cmd', '').strip().upper()
         if cmd:
             return self.execute_command(session, cmd)
 
-        return self.get_screen(session, 'wrkschema')
+        return self.get_screen(session, 'wrklib')
 
     def _screen_schema_create(self, session: Session) -> dict:
         """Create Schema screen."""
@@ -3613,7 +3621,7 @@ class ScreenManager:
         if not schema_name:
             session.message = "Schema name is required"
             session.message_level = "error"
-            return self.get_screen(session, 'schema_create')
+            return self.get_screen(session, 'crtlib')
 
         # Create the schema
         success, msg = create_schema(schema_name, owner if owner else None, description)
@@ -3622,8 +3630,8 @@ class ScreenManager:
         session.message_level = "info" if success else "error"
 
         if success:
-            return self.get_screen(session, 'wrkschema')
-        return self.get_screen(session, 'schema_create')
+            return self.get_screen(session, 'wrklib')
+        return self.get_screen(session, 'crtlib')
 
     def _screen_schema_tables(self, session: Session) -> dict:
         """Display tables in a schema."""
@@ -3779,7 +3787,7 @@ class ScreenManager:
         session.message_level = "info" if success else "error"
 
         if success:
-            return self.get_screen(session, 'wrkschema')
+            return self.get_screen(session, 'wrklib')
         return self.get_screen(session, 'grtobjaut')
 
     def _screen_rvkobjaut(self, session: Session) -> dict:
@@ -3874,7 +3882,7 @@ class ScreenManager:
         session.message_level = "info" if success else "error"
 
         if success:
-            return self.get_screen(session, 'wrkschema')
+            return self.get_screen(session, 'wrklib')
         return self.get_screen(session, 'rvkobjaut')
 
     def _screen_dspobjaut(self, session: Session) -> dict:
@@ -7818,7 +7826,7 @@ class ScreenManager:
             pad_line(f"                                                          {date_str}  {time_str}"),
             pad_line(""),
             pad_line(" Type options, press Enter."),
-            pad_line("   2=Change   4=Delete   5=Display   12=Work with objects"),
+            pad_line("   2=Change   4=Delete   5=Display   8=Grant   9=Auth   12=Objects"),
             pad_line(""),
             [{"type": "text", "text": pad_line(" Opt  Library     Type    Text                                  "), "class": "field-reverse"}],
         ]
@@ -7910,6 +7918,12 @@ class ScreenManager:
                 elif opt == '5':  # Display
                     session.field_values['selected_lib'] = lib['name']
                     return self.get_screen(session, 'dsplib')
+                elif opt == '8':  # Grant Authority
+                    session.field_values['selected_schema'] = lib['name'].lower()
+                    return self.get_screen(session, 'grtobjaut')
+                elif opt == '9':  # Display Authority
+                    session.field_values['selected_schema'] = lib['name'].lower()
+                    return self.get_screen(session, 'dspobjaut')
                 elif opt == '12':  # Work with objects
                     session.field_values['selected_lib'] = lib['name']
                     return self.get_screen(session, 'wrkobj')
@@ -8313,8 +8327,27 @@ class ScreenManager:
             return delete_subsystem_description(name, library)
         elif obj_type == 'JOBSCDE':
             return remove_job_schedule_entry(name, library)
+        elif obj_type == 'FILE':
+            # Drop table - BE CAREFUL, this is destructive!
+            return self._delete_table(library, name)
         else:
             return False, f"Cannot delete object type {obj_type}"
+
+    def _delete_table(self, library: str, name: str) -> tuple[bool, str]:
+        """Delete a table (*FILE) from a library."""
+        lib_safe = library.lower().replace('-', '_')
+        try:
+            with get_cursor(dict_cursor=False) as cursor:
+                # Use sql module for safe identifier handling
+                cursor.execute(
+                    sql.SQL("DROP TABLE IF EXISTS {}.{}").format(
+                        sql.Identifier(lib_safe),
+                        sql.Identifier(name.lower())
+                    )
+                )
+            return True, f"Table {library}/{name} deleted"
+        except Exception as e:
+            return False, f"Failed to delete table: {e}"
 
     def _display_object(self, session: Session, library: str, name: str, obj_type: str) -> dict:
         """Navigate to the display screen for an object type."""
@@ -8346,7 +8379,67 @@ class ScreenManager:
             session.field_values['selected_sbsd'] = name
             session.field_values['selected_sbsd_lib'] = library
             return self.get_screen(session, 'wrksbsd')
+        elif obj_type == 'FILE':
+            # Display table structure
+            session.field_values['selected_file'] = name
+            session.field_values['selected_file_lib'] = library
+            return self.get_screen(session, 'dspfd')
         else:
             session.message = f"Cannot display object type {obj_type}"
             session.message_level = "error"
             return self.get_screen(session, 'wrkobj')
+
+    def _screen_dspfd(self, session: Session) -> dict:
+        """Display File Description screen - AS/400 DSPFD equivalent."""
+        hostname, date_str, time_str = get_system_info()
+        file_name = session.field_values.get('selected_file', '')
+        lib_name = session.field_values.get('selected_file_lib', '')
+        lib_safe = lib_name.lower().replace('-', '_')
+
+        # Get column information
+        columns = list_table_columns(lib_safe, file_name.lower())
+
+        offset = session.get_offset('dspfd')
+        page_size = 12
+
+        content = [
+            pad_line(f" {hostname:<20}   Display File Description                   {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" File  . . . . . . . . :  {file_name}"),
+            pad_line(f" Library . . . . . . . :  {lib_name}"),
+            pad_line(f" Type  . . . . . . . . :  *FILE"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Field              Type            Length  Null"), "class": "field-reverse"}],
+        ]
+
+        page_cols = columns[offset:offset + page_size]
+        for col in page_cols:
+            data_type = col.get('data_type', 'UNKNOWN').upper()
+            length = col.get('character_maximum_length', '')
+            if not length and col.get('numeric_precision'):
+                length = f"{col['numeric_precision']},{col.get('numeric_scale', 0)}"
+            nullable = 'Y' if col.get('is_nullable', 'YES') == 'YES' else 'N'
+            content.append(pad_line(f" {col['column_name'][:18]:<18} {data_type[:15]:<15} {str(length)[:7]:<7} {nullable}"))
+
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        more = "More..." if len(columns) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel  PgUp/PgDn=Page"))
+
+        return {
+            "type": "screen",
+            "screen": "dspfd",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
