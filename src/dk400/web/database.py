@@ -3825,7 +3825,8 @@ def execute_query_definition(
                 WHERE name = %s AND library = %s
             """, (name.upper(), library.upper()))
 
-        return True, [dict(row) for row in rows], col_names
+        # Convert dict keys to uppercase to match col_names
+        return True, [{k.upper(): v for k, v in dict(row).items()} for row in rows], col_names
 
     except Exception as e:
         logger.error(f"Failed to execute query {name}: {e}")
@@ -3871,7 +3872,8 @@ def run_adhoc_query(
 
             col_names = [desc[0].upper() for desc in cursor.description] if cursor.description else []
 
-        return True, [dict(row) for row in rows], col_names
+        # Convert dict keys to uppercase to match col_names
+        return True, [{k.upper(): v for k, v in dict(row).items()} for row in rows], col_names
 
     except Exception as e:
         logger.error(f"Failed to run ad-hoc query: {e}")

@@ -5955,10 +5955,10 @@ class ScreenManager:
         qry_summary = session.field_values.get('qry_summary', [])
         qry_groupby = session.field_values.get('qry_groupby', [])
 
-        # Format status indicators
-        file_status = f"{qry_schema}.{qry_table}" if qry_schema and qry_table else "(not selected)"
+        # Format status indicators (AS/400 style: FILE/LIBRARY)
+        file_status = f"{qry_table}/{qry_schema}" if qry_schema and qry_table else "(not selected)"
         col_count = len(qry_columns) if qry_columns else 0
-        col_status = f"{col_count} selected" if col_count else "(all columns)"
+        col_status = f"{col_count} selected" if col_count else "(all fields)"
         cond_count = len(qry_conditions) if qry_conditions else 0
         cond_status = f"{cond_count} condition(s)" if cond_count else "(none)"
         sort_count = len(qry_orderby) if qry_orderby else 0
@@ -6231,7 +6231,7 @@ class ScreenManager:
         return None  # Key not handled
 
     def _screen_qryfiles(self, session: Session) -> dict:
-        """Select File for Query screen - choose schema and table."""
+        """Select File for Query screen - choose library and file (AS/400 style)."""
         hostname, date_str, time_str = get_system_info()
 
         qry_schema = session.field_values.get('qry_schema', '')
@@ -6240,7 +6240,7 @@ class ScreenManager:
         content = []
 
         # Header
-        content.append(pad_line(f" {hostname:<20}       Select File for Query                   {session.user:>10}"))
+        content.append(pad_line(f" {hostname:<20}       Specify File Selections                  {session.user:>10}"))
         content.append(pad_line(f"                                                          {date_str}  {time_str}"))
         content.append(pad_line(""))
 
@@ -6250,23 +6250,23 @@ class ScreenManager:
         else:
             content.append(pad_line(""))
 
-        content.append(pad_line(" Type schema and table name, press Enter."))
-        content.append(pad_line(" Press F4 for list of schemas or tables."))
+        content.append(pad_line(" Type choices, press Enter."))
         content.append(pad_line(""))
 
-        # Schema field
+        # File (Table) field - AS/400 shows File first
         content.append([
-            {"type": "text", "text": " Schema (library)  . . . "},
+            {"type": "text", "text": " File  . . . . . . . . . . "},
+            {"type": "input", "id": "table", "width": 30, "value": qry_table, "class": "field-input"},
+        ])
+
+        # Library (Schema) field - indented under File like AS/400
+        content.append([
+            {"type": "text", "text": "   Library . . . . . . . . "},
             {"type": "input", "id": "schema", "width": 30, "value": qry_schema, "class": "field-input"},
         ])
         content.append(pad_line(""))
-
-        # Table field
-        content.append([
-            {"type": "text", "text": " Table (file)  . . . . . "},
-            {"type": "input", "id": "table", "width": 30, "value": qry_table, "class": "field-input"},
-        ])
         content.append(pad_line(""))
+        content.append(pad_line(" F4=Prompt for list"))
 
         # Pad to consistent height
         while len(content) < 19:
@@ -6291,8 +6291,8 @@ class ScreenManager:
             "cols": 80,
             "content": content,
             "fields": [
-                {"id": "schema"},
                 {"id": "table"},
+                {"id": "schema"},
                 {"id": "cmd"},
             ],
             "activeField": 0,
@@ -6309,41 +6309,41 @@ class ScreenManager:
         table = fields.get('table', '').strip().lower()
 
         if not schema:
-            session.message = "Schema is required"
+            session.message = "Library is required"
             session.message_level = "error"
             return self.get_screen(session, 'qryfiles')
 
         if not table:
-            session.message = "Table is required"
+            session.message = "File is required"
             session.message_level = "error"
             return self.get_screen(session, 'qryfiles')
 
-        # Verify table exists by trying to get columns
+        # Verify file exists by trying to get fields
         columns = list_table_columns(schema, table)
         if not columns:
-            session.message = f"Table {schema}.{table} not found or has no columns"
+            session.message = f"File {table} in library {schema} not found"
             session.message_level = "error"
             return self.get_screen(session, 'qryfiles')
 
         # Save to session
         session.field_values['qry_schema'] = schema
         session.field_values['qry_table'] = table
-        # Clear column selection when table changes
+        # Clear field selection when file changes
         session.field_values['qry_columns'] = []
 
-        session.message = f"Selected {schema}.{table} ({len(columns)} columns)"
+        session.message = f"Selected {table}/{schema} ({len(columns)} fields)"
         session.message_level = "info"
         return self.get_screen(session, 'qrydefine')
 
     def _screen_qryfields(self, session: Session) -> dict:
-        """Select Fields for Query screen - choose columns to include."""
+        """Select Fields for Query screen - choose fields to include."""
         hostname, date_str, time_str = get_system_info()
 
         qry_schema = session.field_values.get('qry_schema', '')
         qry_table = session.field_values.get('qry_table', '')
         qry_columns = session.field_values.get('qry_columns', [])
 
-        # Get available columns from table
+        # Get available fields from file
         columns = list_table_columns(qry_schema, qry_table) if qry_schema and qry_table else []
 
         offset = session.get_offset('qryfields')
@@ -6354,7 +6354,7 @@ class ScreenManager:
         # Header
         content.append(pad_line(f" {hostname:<20}       Select Fields for Query                 {session.user:>10}"))
         content.append(pad_line(f"                                                          {date_str}  {time_str}"))
-        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+        content.append(pad_line(f" File: {qry_table}/{qry_schema}"))
 
         # Message display
         if session.message:
@@ -6362,14 +6362,14 @@ class ScreenManager:
         else:
             content.append(pad_line(""))
 
-        content.append(pad_line(" Type 1 to select field, blank to deselect. Press Enter."))
+        content.append(pad_line(" Type sequence number (10, 20, 30...) to select. Blank to deselect."))
         content.append(pad_line(""))
 
         # Column headers
-        content.append([{"type": "text", "text": pad_line(" Sel  Field Name                    Type          Null  Seq"), "class": "field-reverse"}])
+        content.append([{"type": "text", "text": pad_line(" Seq   Field Name                    Type          Null"), "class": "field-reverse"}])
 
-        # Build set of selected column names for quick lookup
-        selected_names = {c['name'] for c in qry_columns}
+        # Build map of column name -> sequence for quick lookup
+        col_seq_map = {c['name']: c.get('seq', 0) for c in qry_columns}
 
         # Column list
         fields = []
@@ -6379,22 +6379,17 @@ class ScreenManager:
             field_id = f"sel_{i}"
             fields.append({"id": field_id})
 
-            # Check if column is selected and get its sequence
-            is_selected = col['name'] in selected_names
-            seq = ""
-            if is_selected:
-                for j, c in enumerate(qry_columns):
-                    if c['name'] == col['name']:
-                        seq = str(j + 1)
-                        break
+            # Get sequence number if column is selected
+            seq = col_seq_map.get(col['name'], 0)
+            seq_str = str(seq) if seq > 0 else ""
 
             col_type = col.get('data_type', '')[:12]
             nullable = 'Y' if col.get('is_nullable', True) else 'N'
 
             content.append([
                 {"type": "text", "text": " "},
-                {"type": "input", "id": field_id, "width": 1, "value": "1" if is_selected else "", "class": "field-input"},
-                {"type": "text", "text": f"    {col['name']:<28} {col_type:<12} {nullable:^4} {seq:>3}"},
+                {"type": "input", "id": field_id, "width": 3, "value": seq_str, "class": "field-input"},
+                {"type": "text", "text": f"   {col['name']:<28} {col_type:<12} {nullable:^4}"},
             ])
 
         # Pad empty rows
@@ -6437,29 +6432,40 @@ class ScreenManager:
         page_size = self.PAGE_SIZES['qryfields']
         page_columns = columns[offset:offset + page_size]
 
-        # Get current selection
+        # Get current selection as dict for easy update
         qry_columns = session.field_values.get('qry_columns', [])
-        selected_names = {c['name'] for c in qry_columns}
+        col_by_name = {c['name']: c for c in qry_columns}
 
-        # Process selections from this page
+        # Process sequence numbers from this page
         for i, col in enumerate(page_columns):
-            sel = fields.get(f'sel_{i}', '').strip()
+            seq_str = fields.get(f'sel_{i}', '').strip()
             col_name = col['name']
 
-            if sel == '1':
-                # Add to selection if not already selected
-                if col_name not in selected_names:
-                    qry_columns.append({'name': col_name, 'alias': '', 'seq': len(qry_columns) + 1})
-                    selected_names.add(col_name)
-            else:
-                # Remove from selection if selected
-                if col_name in selected_names:
-                    qry_columns = [c for c in qry_columns if c['name'] != col_name]
-                    selected_names.discard(col_name)
-                    # Re-sequence
-                    for j, c in enumerate(qry_columns):
-                        c['seq'] = j + 1
+            if seq_str:
+                # Parse sequence number
+                try:
+                    seq_num = int(seq_str)
+                    if seq_num <= 0:
+                        session.message = f"Sequence must be > 0 for {col_name}"
+                        session.message_level = "error"
+                        return self.get_screen(session, 'qryfields')
+                except ValueError:
+                    session.message = f"Invalid sequence '{seq_str}' for {col_name}"
+                    session.message_level = "error"
+                    return self.get_screen(session, 'qryfields')
 
+                # Add or update column selection
+                if col_name in col_by_name:
+                    col_by_name[col_name]['seq'] = seq_num
+                else:
+                    col_by_name[col_name] = {'name': col_name, 'alias': '', 'seq': seq_num}
+            else:
+                # Blank - remove from selection if present
+                if col_name in col_by_name:
+                    del col_by_name[col_name]
+
+        # Convert back to list sorted by sequence
+        qry_columns = sorted(col_by_name.values(), key=lambda c: c.get('seq', 0))
         session.field_values['qry_columns'] = qry_columns
 
         # Check if we need to page
@@ -6489,7 +6495,7 @@ class ScreenManager:
         # Header
         content.append(pad_line(f" {hostname:<20}       Select Records                           {session.user:>10}"))
         content.append(pad_line(f"                                                          {date_str}  {time_str}"))
-        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+        content.append(pad_line(f" File: {qry_table}/{qry_schema}"))
 
         # Message display
         if session.message:
@@ -6636,7 +6642,7 @@ class ScreenManager:
         # Header
         content.append(pad_line(f" {hostname:<20}       {title:<28}           {session.user:>10}"))
         content.append(pad_line(f"                                                          {date_str}  {time_str}"))
-        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+        content.append(pad_line(f" File: {qry_table}/{qry_schema}"))
 
         # Message display
         if session.message:
@@ -6807,7 +6813,7 @@ class ScreenManager:
         # Header
         content.append(pad_line(f" {hostname:<20}       Select Sort Fields                       {session.user:>10}"))
         content.append(pad_line(f"                                                          {date_str}  {time_str}"))
-        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+        content.append(pad_line(f" File: {qry_table}/{qry_schema}"))
 
         # Message display
         if session.message:
@@ -7501,7 +7507,7 @@ class ScreenManager:
         # Header
         content.append(pad_line(f" {hostname:<20}       Select Summary Functions                 {session.user:>10}"))
         content.append(pad_line(f"                                                          {date_str}  {time_str}"))
-        content.append(pad_line(f" File: {qry_schema}.{qry_table}"))
+        content.append(pad_line(f" File: {qry_table}/{qry_schema}"))
 
         # Message display
         if session.message:
