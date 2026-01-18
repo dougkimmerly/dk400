@@ -8015,7 +8015,7 @@ class ScreenManager:
         objects = get_library_objects(lib_name)
         obj_counts = {}
         for obj in objects:
-            obj_type = obj.get('object_type', 'UNKNOWN')
+            obj_type = obj.get('type', 'UNKNOWN')
             obj_counts[obj_type] = obj_counts.get(obj_type, 0) + 1
 
         content = [
@@ -8035,14 +8035,14 @@ class ScreenManager:
 
         # Display object counts by type
         type_labels = {
-            '*DTAARA': 'Data areas',
-            '*MSGQ': 'Message queues',
-            '*QRYDFN': 'Query definitions',
-            '*JOBD': 'Job descriptions',
-            '*OUTQ': 'Output queues',
-            '*AUTL': 'Authorization lists',
-            '*SBSD': 'Subsystem descriptions',
-            '*JOBSCDE': 'Job schedule entries',
+            'DTAARA': 'Data areas',
+            'MSGQ': 'Message queues',
+            'QRYDFN': 'Query definitions',
+            'JOBD': 'Job descriptions',
+            'OUTQ': 'Output queues',
+            'AUTL': 'Authorization lists',
+            'SBSD': 'Subsystem descriptions',
+            'JOBSCDE': 'Job schedule entries',
         }
         for obj_type, label in type_labels.items():
             count = obj_counts.get(obj_type, 0)
@@ -8232,7 +8232,7 @@ class ScreenManager:
         for i, obj in enumerate(page_objs):
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
-                {"type": "text", "text": f"  {obj['name']:<10} {obj['object_type']:<8}  {obj.get('text', '')[:35]}"},
+                {"type": "text", "text": f"  {obj['name']:<10} {obj['type']:<8}  {obj.get('text', '')[:35]}"},
             ]
             content.append(row)
             fields.append({"id": f"opt_{i}"})
@@ -8278,7 +8278,7 @@ class ScreenManager:
         for i, obj in enumerate(page_objs):
             opt = fields.get(f'opt_{i}', '').strip()
             if opt:
-                obj_type = obj.get('object_type', '')
+                obj_type = obj.get('type', '')
                 obj_name = obj['name']
 
                 if opt == '4':  # Delete
@@ -8297,52 +8297,52 @@ class ScreenManager:
 
     def _delete_object(self, library: str, name: str, obj_type: str) -> tuple[bool, str]:
         """Delete an object from a library by type."""
-        if obj_type == '*DTAARA':
+        if obj_type == 'DTAARA':
             return delete_data_area(name, library)
-        elif obj_type == '*MSGQ':
+        elif obj_type == 'MSGQ':
             return delete_message_queue(name, library)
-        elif obj_type == '*QRYDFN':
+        elif obj_type == 'QRYDFN':
             return delete_query_definition(name, library)
-        elif obj_type == '*JOBD':
+        elif obj_type == 'JOBD':
             return delete_job_description(name, library)
-        elif obj_type == '*OUTQ':
+        elif obj_type == 'OUTQ':
             return delete_output_queue(name, library)
-        elif obj_type == '*AUTL':
+        elif obj_type == 'AUTL':
             return delete_authorization_list(name, library)
-        elif obj_type == '*SBSD':
+        elif obj_type == 'SBSD':
             return delete_subsystem_description(name, library)
-        elif obj_type == '*JOBSCDE':
+        elif obj_type == 'JOBSCDE':
             return remove_job_schedule_entry(name, library)
         else:
             return False, f"Cannot delete object type {obj_type}"
 
     def _display_object(self, session: Session, library: str, name: str, obj_type: str) -> dict:
         """Navigate to the display screen for an object type."""
-        if obj_type == '*DTAARA':
+        if obj_type == 'DTAARA':
             session.field_values['selected_dtaara'] = name
             session.field_values['selected_dtaara_lib'] = library
             return self.get_screen(session, 'dspdtaara')
-        elif obj_type == '*MSGQ':
+        elif obj_type == 'MSGQ':
             session.field_values['selected_msgq'] = name
             session.field_values['selected_msgq_lib'] = library
             return self.get_screen(session, 'dspmsg')
-        elif obj_type == '*QRYDFN':
+        elif obj_type == 'QRYDFN':
             session.field_values['qry_name'] = name
             session.field_values['qry_library'] = library
             return self.get_screen(session, 'qrydefine')
-        elif obj_type == '*JOBD':
+        elif obj_type == 'JOBD':
             session.field_values['selected_jobd'] = name
             session.field_values['selected_jobd_lib'] = library
             return self.get_screen(session, 'dspjobd')
-        elif obj_type == '*OUTQ':
+        elif obj_type == 'OUTQ':
             session.field_values['selected_outq'] = name
             session.field_values['selected_outq_lib'] = library
             return self.get_screen(session, 'wrkoutq')
-        elif obj_type == '*AUTL':
+        elif obj_type == 'AUTL':
             session.field_values['selected_autl'] = name
             session.field_values['selected_autl_lib'] = library
             return self.get_screen(session, 'dspautl')
-        elif obj_type == '*SBSD':
+        elif obj_type == 'SBSD':
             session.field_values['selected_sbsd'] = name
             session.field_values['selected_sbsd_lib'] = library
             return self.get_screen(session, 'wrksbsd')
