@@ -631,13 +631,17 @@ class Terminal5250 {
                     this.handleFunctionKey(key);
                 }
             }
-            // Handle clicks on hotspots (More.../Prev navigation)
+            // Handle clicks on hotspots (navigation, function keys)
             if (e.target.classList.contains('hotspot')) {
                 const action = e.target.dataset.action;
                 if (action === 'page_down' || action === 'roll_down') {
                     this.handleRoll('down');
                 } else if (action === 'page_up' || action === 'roll_up') {
                     this.handleRoll('up');
+                } else if (action && action.startsWith('fkey_')) {
+                    // Function key hotspot (e.g., fkey_F3 -> F3)
+                    const fkey = action.substring(5);  // Remove 'fkey_' prefix
+                    this.handleFunctionKey(fkey);
                 }
             }
         });

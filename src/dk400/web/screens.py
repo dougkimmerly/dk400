@@ -118,6 +118,54 @@ def center_text(text: str, width: int = COLS_80) -> str:
     return text.center(width)
 
 
+def fkey_line(keys: str, width: int = COLS_80) -> list:
+    """Generate a clickable function key line.
+
+    Takes a string like "F3=Exit  F5=Refresh  F12=Cancel" and returns
+    a list of segments with clickable hotspots for each function key.
+
+    Also handles PageDown/PageUp as roll hotspots.
+    """
+    import re
+    segments = []
+    segments.append({"type": "text", "text": " "})  # Leading space
+
+    # Split on multiple spaces to get key=label pairs
+    parts = re.split(r'(\s{2,})', keys.strip())
+
+    for part in parts:
+        if not part or part.isspace():
+            # Preserve spacing
+            if part:
+                segments.append({"type": "text", "text": part})
+            continue
+
+        # Check for function key pattern (F1=Label, F12=Label, etc.)
+        fkey_match = re.match(r'^(F\d+)=(.+)$', part)
+        if fkey_match:
+            fkey, label = fkey_match.groups()
+            segments.append({"type": "hotspot", "text": f"{fkey}={label}", "action": f"fkey_{fkey}"})
+            continue
+
+        # Check for PageDown/PageUp
+        if 'PageDown' in part:
+            segments.append({"type": "hotspot", "text": part, "action": "roll_down"})
+            continue
+        if 'PageUp' in part:
+            segments.append({"type": "hotspot", "text": part, "action": "roll_up"})
+            continue
+
+        # Plain text
+        segments.append({"type": "text", "text": part})
+
+    # Pad to width
+    current_len = sum(len(s.get('text', '')) for s in segments)
+    if current_len < width:
+        segments.append({"type": "text", "text": " " * (width - current_len)})
+
+    return segments
+
+
 LOGO_FULL = """\
   ____  _  ______ ___   ___   ___
  |  _ \\| |/ / / // _ \\ / _ \\ / _ \\
@@ -3279,7 +3327,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit   F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
