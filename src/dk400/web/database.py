@@ -34,8 +34,8 @@ SCHEMA_SQL = """
 -- =============================================================================
 CREATE SCHEMA IF NOT EXISTS qsys;
 
--- Users table (*USRPRF objects)
-CREATE TABLE IF NOT EXISTS qsys.users (
+-- User Profiles (*USRPRF objects)
+CREATE TABLE IF NOT EXISTS qsys.usrprf (
     username VARCHAR(10) PRIMARY KEY,
     password_hash VARCHAR(128) NOT NULL,
     salt VARCHAR(64) NOT NULL,
@@ -51,8 +51,8 @@ CREATE TABLE IF NOT EXISTS qsys.users (
     password_expires VARCHAR(10) DEFAULT '*NOMAX'
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_status ON qsys.users(status);
-CREATE INDEX IF NOT EXISTS idx_users_group ON qsys.users(group_profile);
+CREATE INDEX IF NOT EXISTS idx_usrprf_status ON qsys.usrprf(status);
+CREATE INDEX IF NOT EXISTS idx_usrprf_group ON qsys.usrprf(group_profile);
 
 -- Job history table (QJOBHST)
 CREATE TABLE IF NOT EXISTS qsys._jobhst (
@@ -109,8 +109,8 @@ CREATE TABLE IF NOT EXISTS qsys._lib (
     created_by VARCHAR(10) DEFAULT 'QSECOFR'
 );
 
--- System values table (WRKSYSVAL)
-CREATE TABLE IF NOT EXISTS qsys.system_values (
+-- System Values (QSYSVAL - Work with System Values)
+CREATE TABLE IF NOT EXISTS qsys.qsysval (
     name VARCHAR(20) PRIMARY KEY,
     value VARCHAR(256) NOT NULL,
     description VARCHAR(100) DEFAULT '',
@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS qsys.system_values (
 );
 
 -- Default system values
-INSERT INTO qsys.system_values (name, value, description, category) VALUES
+INSERT INTO qsys.qsysval (name, value, description, category) VALUES
     ('QSYSNAME', 'DK400', 'System name', 'SYSTEM'),
     ('QLOGOSIZE', '*SMALL', 'Logo display size (*FULL, *SMALL, *NONE)', 'DISPLAY'),
     ('QDATFMT', '*MDY', 'Date format (*MDY, *DMY, *YMD, *ISO)', 'DATETIME'),
@@ -494,9 +494,9 @@ def _migrate_public_to_qsys():
     """
     migrations = [
         # (source_table, dest_table, columns)
-        ('public.users', 'qsys.users',
+        ('public.users', 'qsys.usrprf',
          'username, password_hash, salt, user_class, status, description, group_profile, created, last_signon, signon_attempts, password_expires'),
-        ('public.system_values', 'qsys.system_values',
+        ('public.qsysval', 'qsys.qsysval',
          'name, value, description, category, updated_at, updated_by'),
         ('public.libraries', 'qsys._lib',
          'name, type, text, asp_number, create_authority, created, created_by'),
@@ -559,12 +559,12 @@ def _add_library_list_columns():
         with get_cursor(dict_cursor=False) as cursor:
             # Add current_library column if not exists
             cursor.execute("""
-                ALTER TABLE qsys.users
+                ALTER TABLE qsys.usrprf
                 ADD COLUMN IF NOT EXISTS current_library VARCHAR(10) DEFAULT 'QGPL'
             """)
             # Add library_list column if not exists
             cursor.execute("""
-                ALTER TABLE qsys.users
+                ALTER TABLE qsys.usrprf
                 ADD COLUMN IF NOT EXISTS library_list JSONB DEFAULT '["QGPL", "QSYS"]'
             """)
         logger.info("Library list columns added to users table")
@@ -579,6 +579,8 @@ def _rename_tables_to_as400_style():
     """
     renames = [
         # (old_name, new_name)
+        ('qsys.users', 'qsys.usrprf'),  # User profiles
+        ('qsys.system_values', 'qsys.qsysval'),  # System values
         ('qsys.job_history', 'qsys._jobhst'),
         ('qsys.audit_log', 'qsys.qhst'),
         ('qsys.object_authorities', 'qsys._objaut'),
@@ -1026,7 +1028,7 @@ def migrate_from_json(json_file: str) -> tuple[bool, str]:
             for username, user in users_data.items():
                 # Check if user already exists
                 cursor.execute(
-                    "SELECT 1 FROM qsys.users WHERE username = %s",
+                    "SELECT 1 FROM qsys.usrprf WHERE username = %s",
                     (username,)
                 )
                 if cursor.fetchone():
@@ -1035,7 +1037,7 @@ def migrate_from_json(json_file: str) -> tuple[bool, str]:
 
                 # Insert user
                 cursor.execute("""
-                    INSERT INTO qsys.users (
+                    INSERT INTO qsys.usrprf (
                         username, password_hash, salt, user_class, status,
                         description, created, last_signon, signon_attempts,
                         password_expires
@@ -1070,7 +1072,7 @@ USER_CLASS_GRANTS = {
     '*SECOFR': {
         # Security Officer - full access to everything
         'tables': {
-            'qsys.users': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+            'qsys.usrprf': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
             'qsys._jobhst': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
             'qsys.qhst': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
             'qsys._objaut': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
@@ -1080,7 +1082,7 @@ USER_CLASS_GRANTS = {
     '*SECADM': {
         # Security Admin - can manage users but not full system access
         'tables': {
-            'qsys.users': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+            'qsys.usrprf': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
             'qsys._jobhst': ['SELECT'],
             'qsys.qhst': ['SELECT', 'INSERT'],
             'qsys._objaut': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
@@ -1090,7 +1092,7 @@ USER_CLASS_GRANTS = {
     '*PGMR': {
         # Programmer - full access to app tables, read users
         'tables': {
-            'qsys.users': ['SELECT'],
+            'qsys.usrprf': ['SELECT'],
             'qsys._jobhst': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
             'qsys.qhst': ['SELECT', 'INSERT'],
             'qsys._objaut': ['SELECT'],
@@ -1100,7 +1102,7 @@ USER_CLASS_GRANTS = {
     '*SYSOPR': {
         # System Operator - operational access
         'tables': {
-            'qsys.users': ['SELECT'],
+            'qsys.usrprf': ['SELECT'],
             'qsys._jobhst': ['SELECT', 'INSERT', 'UPDATE'],
             'qsys.qhst': ['SELECT', 'INSERT'],
             'qsys._objaut': ['SELECT'],
@@ -1110,7 +1112,7 @@ USER_CLASS_GRANTS = {
     '*USER': {
         # Regular user - read-only on most tables
         'tables': {
-            'qsys.users': [],  # No direct access to users table
+            'qsys.usrprf': [],  # No direct access to users table
             'qsys._jobhst': ['SELECT'],
             'qsys.qhst': [],  # No access to audit log
             'qsys._objaut': ['SELECT'],
@@ -1325,7 +1327,7 @@ def _apply_role_grants(cursor, role_name: str, user_class: str):
         if privileges:
             # Grant specified privileges
             privs = ', '.join(privileges)
-            # Handle schema-qualified table names (e.g., 'qsys.users')
+            # Handle schema-qualified table names (e.g., 'qsys.usrprf')
             if '.' in table:
                 schema, table_name = table.split('.', 1)
                 table_ref = sql.SQL("{}.{}").format(
@@ -1449,7 +1451,7 @@ def create_schema(schema_name: str, owner: str = None, description: str = '') ->
 
             # Grant *SECOFR users (security officers) full access to new schemas
             cursor.execute("""
-                SELECT username FROM qsys.users WHERE user_class = '*SECOFR'
+                SELECT username FROM qsys.usrprf WHERE user_class = '*SECOFR'
             """)
             secofr_users = cursor.fetchall()
             for row in secofr_users:
@@ -1887,7 +1889,7 @@ def set_group_profile(username: str, group_profile: str) -> tuple[bool, str]:
     # Verify the group user exists
     try:
         with get_cursor() as cursor:
-            cursor.execute("SELECT 1 FROM qsys.users WHERE username = %s", (group_profile,))
+            cursor.execute("SELECT 1 FROM qsys.usrprf WHERE username = %s", (group_profile,))
             if not cursor.fetchone():
                 return False, f"Group profile {group_profile} not found"
     except Exception as e:
@@ -1933,7 +1935,7 @@ def set_group_profile(username: str, group_profile: str) -> tuple[bool, str]:
 
             # Update users table
             cursor.execute(
-                "UPDATE qsys.users SET group_profile = %s WHERE username = %s",
+                "UPDATE qsys.usrprf SET group_profile = %s WHERE username = %s",
                 (group_profile, username)
             )
 
@@ -1980,7 +1982,7 @@ def remove_from_group(username: str) -> tuple[bool, str]:
 
             # Update users table
             cursor.execute(
-                "UPDATE qsys.users SET group_profile = '*NONE' WHERE username = %s",
+                "UPDATE qsys.usrprf SET group_profile = '*NONE' WHERE username = %s",
                 (username,)
             )
 
@@ -2042,7 +2044,7 @@ def get_user_group(username: str) -> str:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "SELECT group_profile FROM qsys.users WHERE username = %s",
+                "SELECT group_profile FROM qsys.usrprf WHERE username = %s",
                 (username,)
             )
             row = cursor.fetchone()
@@ -2062,7 +2064,7 @@ def get_group_members(group_profile: str) -> list[str]:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "SELECT username FROM qsys.users WHERE group_profile = %s ORDER BY username",
+                "SELECT username FROM qsys.usrprf WHERE group_profile = %s ORDER BY username",
                 (group_profile,)
             )
             for row in cursor.fetchall():
@@ -2087,7 +2089,7 @@ def get_user_library_list(username: str) -> list[str]:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "SELECT library_list, current_library FROM qsys.users WHERE username = %s",
+                "SELECT library_list, current_library FROM qsys.usrprf WHERE username = %s",
                 (username,)
             )
             row = cursor.fetchone()
@@ -2111,7 +2113,7 @@ def get_user_current_library(username: str) -> str:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "SELECT current_library FROM qsys.users WHERE username = %s",
+                "SELECT current_library FROM qsys.usrprf WHERE username = %s",
                 (username,)
             )
             row = cursor.fetchone()
@@ -2133,7 +2135,7 @@ def set_user_library_list(username: str, library_list: list[str]) -> tuple[bool,
         import json
         with get_cursor() as cursor:
             cursor.execute(
-                "UPDATE qsys.users SET library_list = %s WHERE username = %s",
+                "UPDATE qsys.usrprf SET library_list = %s WHERE username = %s",
                 (json.dumps(library_list), username)
             )
         return True, f"Library list updated for {username}"
@@ -2150,7 +2152,7 @@ def set_user_current_library(username: str, library: str) -> tuple[bool, str]:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "UPDATE qsys.users SET current_library = %s WHERE username = %s",
+                "UPDATE qsys.usrprf SET current_library = %s WHERE username = %s",
                 (library, username)
             )
         return True, f"Current library set to {library} for {username}"
@@ -2249,7 +2251,7 @@ def get_system_value(name: str, default: str = '') -> str:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "SELECT value FROM qsys.system_values WHERE name = %s",
+                "SELECT value FROM qsys.qsysval WHERE name = %s",
                 (name,)
             )
             row = cursor.fetchone()
@@ -2273,7 +2275,7 @@ def set_system_value(name: str, value: str, updated_by: str = 'SYSTEM') -> tuple
     try:
         with get_cursor() as cursor:
             cursor.execute("""
-                UPDATE qsys.system_values
+                UPDATE qsys.qsysval
                 SET value = %s, updated_at = CURRENT_TIMESTAMP, updated_by = %s
                 WHERE name = %s
             """, (value, updated_by, name))
@@ -2293,7 +2295,7 @@ def set_system_value(name: str, value: str, updated_by: str = 'SYSTEM') -> tuple
         return False, f"Failed to set system value: {e}"
 
 
-def list_system_values(category: str = None) -> list[dict]:
+def list_qsysval(category: str = None) -> list[dict]:
     """
     List all system values, optionally filtered by category.
     """
@@ -2303,14 +2305,14 @@ def list_system_values(category: str = None) -> list[dict]:
             if category:
                 cursor.execute("""
                     SELECT name, value, description, category, updated_at, updated_by
-                    FROM qsys.system_values
+                    FROM qsys.qsysval
                     WHERE category = %s
                     ORDER BY name
                 """, (category.upper(),))
             else:
                 cursor.execute("""
                     SELECT name, value, description, category, updated_at, updated_by
-                    FROM qsys.system_values
+                    FROM qsys.qsysval
                     ORDER BY category, name
                 """)
 
@@ -2814,7 +2816,7 @@ def unlock_data_area(name: str, library: str = 'QGPL', unlocked_by: str = 'SYSTE
             if row['locked_by'] and row['locked_by'] != unlocked_by:
                 # Check if unlocked_by is SECOFR
                 cursor.execute(
-                    "SELECT user_class FROM qsys.users WHERE username = %s",
+                    "SELECT user_class FROM qsys.usrprf WHERE username = %s",
                     (unlocked_by,)
                 )
                 user_row = cursor.fetchone()

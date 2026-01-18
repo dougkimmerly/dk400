@@ -20,7 +20,7 @@ from src.dk400.web.database import (
     create_schema, drop_schema, list_schemas, list_schema_tables,
     grant_object_authority, revoke_object_authority, get_object_authorities,
     get_effective_authorities, get_user_group, AUTHORITY_GRANTS,
-    get_system_value, set_system_value, list_system_values,
+    get_system_value, set_system_value, list_qsysval,
     get_system_datetime, get_system_timezone_name,
     # Message Queues
     create_message_queue, delete_message_queue, list_message_queues,
@@ -4143,7 +4143,7 @@ class ScreenManager:
 
         hostname, date_str, time_str = get_system_info()
 
-        sysvals = list_system_values()
+        sysvals = list_qsysval()
         offset = session.get_offset('wrksysval')
         page_size = 12
 
@@ -4202,7 +4202,7 @@ class ScreenManager:
 
     def _submit_wrksysval(self, session: Session, fields: dict) -> dict:
         """Handle Work with System Values submission."""
-        sysvals = list_system_values()
+        sysvals = list_qsysval()
         offset = session.get_offset('wrksysval')
         page_size = 12
         page_vals = sysvals[offset:offset + page_size]
