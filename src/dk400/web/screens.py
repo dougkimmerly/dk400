@@ -337,7 +337,6 @@ class ScreenManager:
 
             # Check if we have a focused field that has parameter prompts
             active_field = fields.get('_active_field', '').lower()
-            print(f"F4 DEBUG: screen={screen}, active_field='{active_field}', fields={list(fields.keys())}", flush=True)
 
             # If on command line or no active field, show command list
             if not active_field or active_field == 'cmd':
@@ -347,15 +346,12 @@ class ScreenManager:
 
             # Check if this screen has a command mapping
             command_name = self.SCREEN_COMMAND_MAP.get(screen)
-            print(f"F4 DEBUG: command_name={command_name} for screen={screen}", flush=True)
             if command_name:
                 # Map field ID to parameter name
                 parm_name = self.FIELD_PARM_MAP.get(active_field, active_field.upper())
-                print(f"F4 DEBUG: parm_name={parm_name} for active_field={active_field}", flush=True)
 
                 # Check if valid values exist for this parameter
                 valid_values = get_parameter_valid_values(command_name, parm_name)
-                print(f"F4 DEBUG: valid_values count={len(valid_values) if valid_values else 0}", flush=True)
                 if valid_values:
                     # Show parameter value prompt
                     session.field_values['f4_command'] = command_name
@@ -3235,13 +3231,17 @@ class ScreenManager:
             {"type": "text", "text": "    Confirm password  . . . . . . . :   "},
             {"type": "input", "id": "confirm_pwd", "width": 10, "password": True},
         ])
+        # Get values - prefer F4 selected, then previously entered, then default
+        user_class_val = session.field_values.get('f4_selected_user_class') or session.field_values.get('user_class', '*USER')
+        group_profile_val = session.field_values.get('f4_selected_group_profile') or session.field_values.get('group_profile', '*NONE')
+
         content.append([
             {"type": "text", "text": "    User class  . . . . . . . . . . :   "},
-            {"type": "input", "id": "user_class", "width": 10, "value": "*USER"},
+            {"type": "input", "id": "user_class", "width": 10, "value": user_class_val},
         ])
         content.append([
             {"type": "text", "text": "    Group profile . . . . . . . . . :   "},
-            {"type": "input", "id": "group_profile", "width": 10, "value": "*NONE"},
+            {"type": "input", "id": "group_profile", "width": 10, "value": group_profile_val},
         ])
         content.append([
             {"type": "text", "text": "    Description . . . . . . . . . . :   "},
