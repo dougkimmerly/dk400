@@ -89,6 +89,14 @@ class Terminal5250 {
         this.screenData = data.content || [];
         this.inputFields = data.fields || [];
         this.activeFieldIndex = data.activeField || 0;
+        this.cols = data.cols || 80;
+
+        // Apply screen width class
+        const screen = this.container.querySelector('.terminal-screen');
+        if (screen) {
+            screen.classList.remove('cols-80', 'cols-132');
+            screen.classList.add(`cols-${this.cols}`);
+        }
 
         this.renderScreen();
 

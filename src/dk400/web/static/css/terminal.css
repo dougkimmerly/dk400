@@ -1,8 +1,9 @@
-/* DK/400 - Full Screen IBM 5250 Terminal Emulator */
+/* DK/400 - IBM 5250 Terminal Emulator
+   Fixed 80x24 or 132x27 character grid */
 
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&display=swap');
 
-/* IBM 3270 style font */
+/* IBM 3270 font */
 @font-face {
     font-family: '3270';
     src: url('https://cdn.jsdelivr.net/gh/rbanffy/3270font/build/web/3270-Regular.woff2') format('woff2'),
@@ -14,14 +15,27 @@
 :root {
     /* IBM 5250 phosphor colors */
     --phosphor-green: #33ff33;
-    --phosphor-dim: #20aa20;
-    --phosphor-bright: #66ff66;
-    --phosphor-glow: rgba(51, 255, 51, 0.4);
-    --screen-black: #0a0a0a;
+    --phosphor-dim: #1a991a;
+    --phosphor-bright: #55ff55;
+    --phosphor-glow: rgba(51, 255, 51, 0.5);
+    --screen-black: #000000;
     --field-highlight: #002200;
-    --cursor-color: #33ff33;
     --error-red: #ff5555;
     --warning-yellow: #ffff55;
+
+    /* Character cell dimensions - these are critical for alignment */
+    --char-width: 1ch;
+    --char-height: 1.2em;
+
+    /* Screen modes */
+    --screen-cols: 80;
+    --screen-rows: 24;
+}
+
+/* Wide screen mode (132 columns) */
+.wide-screen {
+    --screen-cols: 132;
+    --screen-rows: 27;
 }
 
 * {
@@ -37,7 +51,6 @@ html, body {
     background: #000;
 }
 
-/* Full screen terminal */
 #terminal {
     width: 100vw;
     height: 100vh;
@@ -47,110 +60,99 @@ html, body {
     background: #000;
 }
 
-/* The terminal screen fills the viewport */
+/* Terminal screen - centered fixed-size box */
 .terminal-screen {
-    font-family: '3270', 'IBM Plex Mono', 'Courier New', monospace;
-    font-size: calc(min(2.2vh, 1.1vw));
-    line-height: 1.4;
+    /* Use monospace font - critical for alignment */
+    font-family: '3270', 'IBM Plex Mono', 'Consolas', 'Monaco', monospace;
+    font-size: 16px;
+    line-height: var(--char-height);
+    letter-spacing: 0;
+
     color: var(--phosphor-green);
     background: var(--screen-black);
-    width: 100vw;
-    height: 100vh;
-    padding: 1vh 2vw;
+
+    /* Default 80 columns */
+    width: calc(80ch + 2ch);
+    min-width: calc(80ch + 2ch);
+
+    padding: 1ch;
     position: relative;
-    display: flex;
-    flex-direction: column;
+
     /* Text glow effect */
     text-shadow:
-        0 0 5px var(--phosphor-glow),
-        0 0 10px var(--phosphor-glow),
-        0 0 20px rgba(51, 255, 51, 0.2);
+        0 0 2px var(--phosphor-glow),
+        0 0 8px rgba(51, 255, 51, 0.3);
 }
 
-/* Scanlines overlay */
-.scanlines {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: repeating-linear-gradient(
-        0deg,
-        rgba(0, 0, 0, 0.15),
-        rgba(0, 0, 0, 0.15) 1px,
-        transparent 1px,
-        transparent 2px
-    );
-    pointer-events: none;
-    z-index: 100;
+/* 80 column mode */
+.terminal-screen.cols-80 {
+    width: calc(80ch + 2ch);
+    min-width: calc(80ch + 2ch);
 }
 
-/* Screen flicker effect */
-.screen-flicker {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(51, 255, 51, 0.02);
-    pointer-events: none;
-    z-index: 99;
-    animation: flicker 0.1s infinite;
+/* 132 column mode - smaller font to fit */
+.terminal-screen.cols-132 {
+    width: calc(132ch + 2ch);
+    min-width: calc(132ch + 2ch);
+    font-size: 12px;
 }
 
-@keyframes flicker {
-    0% { opacity: 0.97; }
-    50% { opacity: 1; }
-    100% { opacity: 0.98; }
+/* Responsive scaling - shrink font if viewport too small */
+@media (max-width: 720px) {
+    .terminal-screen {
+        font-size: 12px;
+    }
 }
 
-/* Vignette effect (darker edges) */
-.vignette {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: radial-gradient(
-        ellipse at center,
-        transparent 0%,
-        transparent 50%,
-        rgba(0, 0, 0, 0.5) 100%
-    );
-    pointer-events: none;
-    z-index: 101;
+@media (max-width: 540px) {
+    .terminal-screen {
+        font-size: 10px;
+    }
+}
+
+@media (max-height: 500px) {
+    .terminal-screen {
+        font-size: 12px;
+    }
 }
 
 /* Screen content area */
 .screen-content {
-    flex: 1;
     white-space: pre;
-    letter-spacing: 0;
+    font-variant-ligatures: none;
+    -webkit-font-smoothing: none;
     overflow: hidden;
 }
 
-/* Screen rows */
+/* Each row is exactly one line height */
 .screen-row {
-    height: 1.4em;
+    height: var(--char-height);
+    line-height: var(--char-height);
     display: block;
     white-space: pre;
+    overflow: hidden;
 }
 
-/* Input fields */
+/* Input fields - must match character grid exactly */
 .input-field {
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    letter-spacing: inherit;
+
     background: transparent;
     border: none;
     outline: none;
-    font-family: inherit;
-    font-size: inherit;
-    color: var(--phosphor-bright);
-    caret-color: var(--cursor-color);
-    text-shadow: inherit;
     padding: 0;
     margin: 0;
-    height: 1.4em;
-    line-height: 1.4;
-    vertical-align: baseline;
+
+    color: var(--phosphor-bright);
+    caret-color: var(--phosphor-green);
+    text-shadow: inherit;
+
+    /* Height matches line height */
+    height: var(--char-height);
+    vertical-align: top;
 }
 
 .input-field:focus {
@@ -162,11 +164,10 @@ html, body {
     color: var(--screen-black);
 }
 
-/* Field types */
+/* Field styling */
 .field-input {
     color: var(--phosphor-bright);
-    text-decoration: underline;
-    text-underline-offset: 3px;
+    border-bottom: 1px solid var(--phosphor-dim);
 }
 
 .field-output {
@@ -179,17 +180,16 @@ html, body {
 
 .field-error {
     color: var(--error-red);
-    text-shadow: 0 0 10px rgba(255, 85, 85, 0.5);
+    text-shadow: 0 0 8px rgba(255, 85, 85, 0.5);
 }
 
 .field-warning {
     color: var(--warning-yellow);
-    text-shadow: 0 0 10px rgba(255, 255, 85, 0.3);
+    text-shadow: 0 0 8px rgba(255, 255, 85, 0.4);
 }
 
 .field-highlight {
     color: var(--phosphor-bright);
-    font-weight: bold;
 }
 
 .field-reverse {
@@ -198,48 +198,86 @@ html, body {
     text-shadow: none;
 }
 
-/* Cursor blink */
-.input-field:focus {
-    animation: cursor-blink 1s step-end infinite;
-}
-
-@keyframes cursor-blink {
-    0%, 50% { caret-color: var(--phosphor-green); }
-    51%, 100% { caret-color: transparent; }
-}
-
-/* Function key bar at bottom */
+/* Function key bar */
 .function-keys {
-    height: 1.4em;
+    height: var(--char-height);
+    line-height: var(--char-height);
+    margin-top: 0.5em;
+    padding-top: 0.5em;
+    border-top: 1px solid #222;
+    color: var(--phosphor-dim);
+    white-space: pre;
     display: flex;
     gap: 2ch;
-    color: var(--phosphor-dim);
-    border-top: 1px solid #222;
-    padding-top: 0.5vh;
-    margin-top: auto;
 }
 
 .fkey {
     cursor: pointer;
-    transition: all 0.1s;
 }
 
 .fkey:hover {
     color: var(--phosphor-bright);
-    text-shadow: 0 0 10px var(--phosphor-glow);
 }
 
-.fkey:active {
-    transform: scale(0.95);
+/* Scanlines overlay */
+.scanlines {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, 0.1),
+        rgba(0, 0, 0, 0.1) 1px,
+        transparent 1px,
+        transparent 2px
+    );
+    pointer-events: none;
+    z-index: 100;
 }
 
-/* Loading/connecting state */
+/* Subtle flicker */
+.screen-flicker {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(51, 255, 51, 0.015);
+    pointer-events: none;
+    z-index: 99;
+    animation: flicker 0.08s infinite;
+}
+
+@keyframes flicker {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.98; }
+}
+
+/* Vignette */
+.vignette {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: radial-gradient(
+        ellipse at center,
+        transparent 0%,
+        transparent 60%,
+        rgba(0, 0, 0, 0.4) 100%
+    );
+    pointer-events: none;
+    z-index: 101;
+}
+
+/* Loading state */
 .connecting {
     display: flex;
     justify-content: center;
     align-items: center;
-    height: 100%;
-    font-size: 1.5em;
+    height: calc(var(--screen-rows) * var(--char-height));
     animation: pulse 1.5s ease-in-out infinite;
 }
 
@@ -248,17 +286,17 @@ html, body {
     50% { opacity: 1; }
 }
 
-/* Screen refresh flash */
+/* Refresh flash */
 .refresh-flash {
-    animation: screen-refresh 0.1s ease-out;
+    animation: screen-refresh 0.08s ease-out;
 }
 
 @keyframes screen-refresh {
-    0% { filter: brightness(1.3); }
+    0% { filter: brightness(1.2); }
     100% { filter: brightness(1); }
 }
 
-/* Session ended overlay */
+/* Session ended */
 .session-ended {
     position: fixed;
     top: 0;
@@ -277,11 +315,10 @@ html, body {
 }
 
 .session-ended h1 {
-    font-size: 3em;
+    font-size: 2em;
     margin-bottom: 1em;
 }
 
 .session-ended p {
-    font-size: 1.2em;
     color: var(--phosphor-dim);
 }

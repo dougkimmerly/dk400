@@ -1,7 +1,7 @@
 """
 DK/400 Screen Definitions
 
-AS/400-style screen layouts and logic for the web terminal.
+AS/400-style screen layouts with fixed 80 or 132 column grids.
 """
 import os
 import socket
@@ -11,6 +11,13 @@ from typing import Any, Optional
 from dataclasses import dataclass, field
 
 from celery import Celery
+
+
+# Screen dimensions
+COLS_80 = 80
+COLS_132 = 132
+ROWS_24 = 24
+ROWS_27 = 27
 
 
 def get_celery_app() -> Celery:
@@ -28,13 +35,24 @@ def get_system_info() -> tuple[str, str, str]:
     return hostname, date_str, time_str
 
 
-LOGO = r"""
+def pad_line(text: str, width: int = COLS_80) -> str:
+    """Pad a line to exact width."""
+    if len(text) > width:
+        return text[:width]
+    return text.ljust(width)
+
+
+def center_text(text: str, width: int = COLS_80) -> str:
+    """Center text within width."""
+    return text.center(width)
+
+
+LOGO = """\
   ____  _  ______ ___   ___   ___
- |  _ \| |/ / / // _ \ / _ \ / _ \
+ |  _ \\| |/ / / // _ \\ / _ \\ / _ \\
  | | | | ' / / /| | | | | | | | | |
- | |_| | . \/ /_| |_| | |_| | |_| |
- |____/|_|\_\____\___/ \___/ \___/
-"""
+ | |_| | . \\/ /_| |_| | |_| | |_| |
+ |____/|_|\\_\\____|\\___/ \\___/ \\___/ """
 
 
 @dataclass
@@ -51,7 +69,6 @@ class Session:
 class ScreenManager:
     """Manages screen rendering and transitions."""
 
-    # Command mapping
     COMMANDS = {
         'WRKACTJOB': 'wrkactjob',
         'WRKJOBQ': 'wrkjobq',
@@ -73,7 +90,6 @@ class ScreenManager:
     def get_screen(self, session: Session, screen_name: str) -> dict:
         """Get screen data for rendering."""
         session.current_screen = screen_name
-
         method = getattr(self, f'_screen_{screen_name}', None)
         if method:
             return method(session)
@@ -82,16 +98,12 @@ class ScreenManager:
     def handle_submit(self, session: Session, screen: str, fields: dict) -> dict:
         """Handle screen submission (Enter key)."""
         session.field_values.update(fields)
-
         method = getattr(self, f'_submit_{screen}', None)
         if method:
             return method(session, fields)
-
-        # Default: check for command in cmd field
         cmd = fields.get('cmd', '').strip().upper()
         if cmd:
             return self.execute_command(session, cmd)
-
         return self.get_screen(session, session.current_screen)
 
     def handle_function_key(self, session: Session, screen: str, key: str, fields: dict) -> dict:
@@ -99,46 +111,31 @@ class ScreenManager:
         session.field_values.update(fields)
 
         if key == 'F3':
-            # Exit - go back to previous screen or sign off
             if screen == 'signon':
-                return {'type': 'message', 'text': 'Press F3 again to disconnect', 'level': 'info'}
+                return {'type': 'exit'}
             elif screen == 'main':
                 return self.get_screen(session, 'signon')
             else:
                 return self.get_screen(session, 'main')
-
         elif key == 'F5':
-            # Refresh current screen
             return self.get_screen(session, screen)
-
         elif key == 'F12':
-            # Cancel - go back
             if screen in ('signon', 'main'):
                 return self.get_screen(session, screen)
             return self.get_screen(session, 'main')
 
-        elif key == 'F4':
-            # Prompt
-            session.message = "Prompting not available"
-            return self.get_screen(session, screen)
-
-        # Default: refresh
         return self.get_screen(session, screen)
 
     def execute_command(self, session: Session, command: str) -> dict:
         """Execute an AS/400 command."""
-        # Check exact match
         if command in self.COMMANDS:
-            screen = self.COMMANDS[command]
             session.message = ""
-            return self.get_screen(session, screen)
+            return self.get_screen(session, self.COMMANDS[command])
 
-        # Check partial match
         matches = [c for c in self.COMMANDS.keys() if c.startswith(command) and not c.isdigit()]
         if len(matches) == 1:
-            screen = self.COMMANDS[matches[0]]
             session.message = ""
-            return self.get_screen(session, screen)
+            return self.get_screen(session, self.COMMANDS[matches[0]])
         elif len(matches) > 1:
             session.message = f"Ambiguous command: {', '.join(matches)}"
             return self.get_screen(session, session.current_screen)
@@ -147,58 +144,65 @@ class ScreenManager:
         session.message_level = "error"
         return self.get_screen(session, session.current_screen)
 
-    # ========== SCREEN DEFINITIONS ==========
+    # ========== SCREEN DEFINITIONS (80 columns) ==========
 
     def _screen_signon(self, session: Session) -> dict:
-        """Sign-on screen."""
+        """Sign-on screen - 80 columns."""
         hostname, date_str, time_str = get_system_info()
 
         content = [
-            "",
-            [{"type": "text", "text": "                                    Sign On", "class": "field-highlight"}],
-            "",
-            f"  System  . . . . . :   {hostname:<12}",
-            f"  Subsystem . . . . :   QINTER",
-            f"  Display . . . . . :   DSP01",
-            "",
+            pad_line(""),
+            pad_line(center_text("Sign On")),
+            pad_line(""),
+            pad_line(f"                         System  . . . . . :   {hostname}"),
+            pad_line(f"                         Subsystem . . . . :   QINTER"),
+            pad_line(f"                         Display . . . . . :   DSP01"),
+            pad_line(""),
             [
-                {"type": "text", "text": "  User  . . . . . . . . . . . . . :  "},
-                {"type": "input", "id": "user", "width": 10, "value": session.field_values.get('user', '')},
+                {"type": "text", "text": "                         User  . . . . . . . . . . . . . :  "},
+                {"type": "input", "id": "user", "width": 10, "value": ""},
             ],
             [
-                {"type": "text", "text": "  Password  . . . . . . . . . . . :  "},
+                {"type": "text", "text": "                         Password  . . . . . . . . . . . :  "},
                 {"type": "input", "id": "password", "width": 10, "password": True},
             ],
             [
-                {"type": "text", "text": "  Program/procedure . . . . . . . :  "},
+                {"type": "text", "text": "                         Program/procedure . . . . . . . :  "},
                 {"type": "input", "id": "program", "width": 10},
             ],
             [
-                {"type": "text", "text": "  Menu  . . . . . . . . . . . . . :  "},
+                {"type": "text", "text": "                         Menu  . . . . . . . . . . . . . :  "},
                 {"type": "input", "id": "menu", "width": 10},
             ],
             [
-                {"type": "text", "text": "  Current library . . . . . . . . :  "},
+                {"type": "text", "text": "                         Current library . . . . . . . . :  "},
                 {"type": "input", "id": "library", "width": 10},
             ],
-            "",
-            "",
-            "",
-            "",
-            "",
-            "  (C) COPYRIGHT IBM CORP. 1980, 2024.",
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(center_text("(C) COPYRIGHT IBM CORP. 1980, 2024.")),
+            pad_line(""),
         ]
 
         return {
             "type": "screen",
             "screen": "signon",
+            "cols": 80,
             "content": content,
             "fields": [
-                {"id": "user", "row": 7, "col": 37},
-                {"id": "password", "row": 8, "col": 37},
-                {"id": "program", "row": 9, "col": 37},
-                {"id": "menu", "row": 10, "col": 37},
-                {"id": "library", "row": 11, "col": 37},
+                {"id": "user"},
+                {"id": "password"},
+                {"id": "program"},
+                {"id": "menu"},
+                {"id": "library"},
             ],
             "activeField": 0,
         }
@@ -212,105 +216,100 @@ class ScreenManager:
         return self.get_screen(session, 'main')
 
     def _screen_main(self, session: Session) -> dict:
-        """Main menu screen."""
+        """Main menu screen - 80 columns."""
         hostname, date_str, time_str = get_system_info()
 
         content = []
         for line in LOGO.split('\n'):
-            content.append(line)
+            content.append(pad_line(line))
 
         content.extend([
-            "",
-            [{"type": "text", "text": "                                        Main Menu", "class": "field-highlight"}],
-            "",
-            f"                                        System: {hostname}",
-            f"                                        User:   {session.user}",
-            f"                                        {date_str}  {time_str}",
-            "",
-            "  Select one of the following:",
-            "",
-            "       1. Work with active jobs         WRKACTJOB",
-            "       2. Work with job queues          WRKJOBQ",
-            "       3. Work with services            WRKSVC",
-            "       4. Display system status         DSPSYSSTS",
-            "       5. Display log                   DSPLOG",
-            "       6. Submit job                    SBMJOB",
-            "",
-            "      90. Sign off                      SIGNOFF",
-            "",
-            "",
-            "  Selection or command",
+            pad_line(""),
+            pad_line(f"                                        Main Menu"),
+            pad_line(""),
+            pad_line(f"                                        System:   {hostname}"),
+            pad_line(f"                                        User:     {session.user}"),
+            pad_line(f"                                        {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line("  Select one of the following:"),
+            pad_line(""),
+            pad_line("       1. Work with active jobs                            WRKACTJOB"),
+            pad_line("       2. Work with job queues                             WRKJOBQ"),
+            pad_line("       3. Work with services                               WRKSVC"),
+            pad_line("       4. Display system status                            DSPSYSSTS"),
+            pad_line("       5. Display log                                      DSPLOG"),
+            pad_line("       6. Submit job                                       SBMJOB"),
+            pad_line(""),
+            pad_line("      90. Sign off                                         SIGNOFF"),
+            pad_line(""),
+            pad_line(""),
+            pad_line("  Selection or command"),
             [
                 {"type": "text", "text": "  ===> "},
-                {"type": "input", "id": "cmd", "width": 50, "value": ""},
+                {"type": "input", "id": "cmd", "width": 66, "value": ""},
             ],
         ])
 
-        # Add message line if present
         if session.message:
-            content.append("")
-            content.append([{"type": "text", "text": f"  {session.message}", "class": f"field-{session.message_level}"}])
+            content.append([{"type": "text", "text": pad_line(f"  {session.message}"), "class": f"field-{session.message_level}"}])
             session.message = ""
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(""))
 
         return {
             "type": "screen",
             "screen": "main",
+            "cols": 80,
             "content": content,
-            "fields": [{"id": "cmd", "row": 20, "col": 8}],
+            "fields": [{"id": "cmd"}],
             "activeField": 0,
         }
 
     def _screen_wrkactjob(self, session: Session) -> dict:
-        """Work with Active Jobs screen."""
+        """Work with Active Jobs - 80 columns."""
         hostname, date_str, time_str = get_system_info()
-        timestamp = f"{date_str}  {time_str}"
-
-        # Get active Celery tasks
         jobs = self._get_celery_jobs()
 
         content = [
-            f" {hostname}                    Work with Active Jobs                  {session.user}",
-            f"                                                          {timestamp}",
-            "",
-            " Type options, press Enter.",
-            "   2=Change   3=Hold   4=End   5=Work with   8=Work with spooled files",
-            "",
-            [{"type": "text", "text": " Opt  Job         User       Type    Status      CPU%  Function", "class": "field-reverse"}],
+            pad_line(f" {hostname:<20}       Work with Active Jobs                  {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Change   3=Hold   4=End   5=Work with   8=Spooled files"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Job         User        Type   Status       CPU%  Function"), "class": "field-reverse"}],
         ]
 
-        # Add job rows
         fields = []
-        for i, job in enumerate(jobs[:15]):  # Max 15 jobs
+        for i, job in enumerate(jobs[:12]):
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
-                {"type": "text", "text": f" {job['name']:<10} {job['user']:<10} {job['type']:<7} {job['status']:<11} {job['cpu']:>4}  {job['function']}"},
+                {"type": "text", "text": f"  {job['name']:<10}  {job['user']:<10}  {job['type']:<5}  {job['status']:<10}  {job['cpu']:>4}  {job['function']:<15}"},
             ]
             content.append(row)
-            fields.append({"id": f"opt_{i}", "row": 7 + i, "col": 1})
+            fields.append({"id": f"opt_{i}"})
 
-        # Pad to fill screen
-        while len(content) < 22:
-            content.append("")
+        while len(content) < 20:
+            content.append(pad_line(""))
 
-        # Add message and command line
-        if session.message:
-            content.append([{"type": "text", "text": f" {session.message}", "class": f"field-{session.message_level}"}])
-            session.message = ""
-        else:
-            content.append("")
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
 
-        content.append([
-            {"type": "text", "text": " Parameters or command"},
-        ])
+        content.append(pad_line(" Parameters or command"))
         content.append([
             {"type": "text", "text": " ===> "},
-            {"type": "input", "id": "cmd", "width": 50},
+            {"type": "input", "id": "cmd", "width": 66},
         ])
-        fields.append({"id": "cmd", "row": 24, "col": 7})
+        fields.append({"id": "cmd"})
+        content.append(pad_line(""))
 
         return {
             "type": "screen",
             "screen": "wrkactjob",
+            "cols": 80,
             "content": content,
             "fields": fields,
             "activeField": 0,
@@ -318,167 +317,153 @@ class ScreenManager:
 
     def _submit_wrkactjob(self, session: Session, fields: dict) -> dict:
         """Handle WRKACTJOB submission."""
-        # Check for command first
         cmd = fields.get('cmd', '').strip().upper()
         if cmd:
             return self.execute_command(session, cmd)
 
-        # Process options
         jobs = self._get_celery_jobs()
-        for i, job in enumerate(jobs[:15]):
+        for i, job in enumerate(jobs[:12]):
             opt = fields.get(f'opt_{i}', '').strip()
             if opt == '4':
-                # End job - revoke Celery task
                 self._revoke_celery_task(job.get('task_id'))
                 session.message = f"Job {job['name']} end requested"
                 break
-            elif opt == '3':
-                session.message = f"Hold not implemented for {job['name']}"
-                break
             elif opt:
-                session.message = f"Option {opt} not valid"
+                session.message = f"Option {opt} not implemented"
                 break
 
         return self.get_screen(session, 'wrkactjob')
 
     def _screen_dspsyssts(self, session: Session) -> dict:
-        """Display System Status screen."""
+        """Display System Status - 80 columns."""
         hostname, date_str, time_str = get_system_info()
-        timestamp = f"{date_str}  {time_str}"
-
         stats = self._get_system_stats()
 
         content = [
-            f" {hostname}                  Display System Status                    {timestamp}",
-            "",
-            f" % CPU utilization . . . . . . . :    {stats['cpu_pct']:5.1f}",
-            f" Elapsed time  . . . . . . . . . :  {stats['elapsed_time']}",
-            f" Jobs in system  . . . . . . . . :    {stats['jobs_in_system']:5d}",
-            f" % permanent addresses . . . . . :     {stats['perm_addr_pct']:4.1f}",
-            f" % temporary addresses . . . . . :      {stats['temp_addr_pct']:3.1f}",
-            "",
-            f" System     ASP . . . . . . . . . :      {stats['asp_util']:4.1f} %",
-            f"   % used . . . . . . . . . . . . :      {stats['disk_pct']:4.1f} %",
-            "",
-            [{"type": "text", "text": "    Pool      Reserved    Max    Allocated   Defined      Pool", "class": "field-highlight"}],
-            f"    *MACHINE       {stats['machine_pool']:5d}      ++     {stats['machine_act']:4d}      {stats['machine_pool']:5d}    Machine pool",
-            f"    *BASE          {stats['base_pool']:5d}      ++     {stats['base_act']:4d}      {stats['base_pool']:5d}    QBATCH QINTER",
-            f"    *INTERACT        {stats['interact_pool']:4d}      ++     {stats['interact_act']:4d}        {stats['interact_pool']:4d}    Interactive",
-            f"    *SPOOL           {stats['spool_pool']:4d}      ++     {stats['spool_act']:4d}        {stats['spool_pool']:4d}    Spooling",
-            "",
-            [{"type": "text", "text": " Subsystem      Subsystem   Active   Wait   Wait      Pool", "class": "field-highlight"}],
-            [{"type": "text", "text": " Name           Status      Jobs     Msg    Job       Name", "class": "field-highlight"}],
-            f" QBATCH         ACTIVE        {stats['celery_active']:4d}      0      {stats['celery_reserved']:3d}    *BASE",
-            f" QINTER         ACTIVE        {stats['docker_containers']:4d}      0        0    *BASE",
-            f" QSPL           ACTIVE           1      0        0    *SPOOL",
-            f" QCTL           ACTIVE           1      0        0    *MACHINE",
-            "",
+            pad_line(f" {hostname:<20}     Display System Status                  {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" % CPU utilization  . . . . . . . . :     {stats['cpu_pct']:5.1f}"),
+            pad_line(f" Elapsed time . . . . . . . . . . . :  {stats['elapsed_time']}"),
+            pad_line(f" Jobs in system . . . . . . . . . . :      {stats['jobs_in_system']:4d}"),
+            pad_line(f" % permanent addresses  . . . . . . :     {stats['perm_addr_pct']:5.1f}"),
+            pad_line(f" % temporary addresses  . . . . . . :     {stats['temp_addr_pct']:5.1f}"),
+            pad_line(""),
+            pad_line(f" System ASP . . . . . . . . . . . . :     {stats['asp_util']:5.1f} %"),
+            pad_line(f"   % system ASP used  . . . . . . . :     {stats['disk_pct']:5.1f}"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line("   Pool    Reserved   Max   Allocated   Defined   Pool Name"), "class": "field-highlight"}],
+            pad_line(f"   *MACHINE     {stats['machine_pool']:5d}    ++      {stats['machine_act']:4d}      {stats['machine_pool']:5d}   Machine pool"),
+            pad_line(f"   *BASE        {stats['base_pool']:5d}    ++      {stats['base_act']:4d}      {stats['base_pool']:5d}   Base pool"),
+            pad_line(f"   *INTERACT     {stats['interact_pool']:4d}    ++      {stats['interact_act']:4d}       {stats['interact_pool']:4d}   Interactive"),
+            pad_line(f"   *SPOOL         {stats['spool_pool']:3d}    ++        {stats['spool_act']:2d}        {stats['spool_pool']:3d}   Spooling"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Subsystem      Status      Active   Max   Pool Name"), "class": "field-highlight"}],
+            pad_line(f" QBATCH         ACTIVE        {stats['celery_active']:4d}    ++   *BASE"),
+            pad_line(f" QINTER         ACTIVE        {stats['docker_containers']:4d}    ++   *INTERACT"),
+            pad_line(f" QSPL           ACTIVE           1    ++   *SPOOL"),
+            pad_line(f" QCTL           ACTIVE           1    ++   *MACHINE"),
+            pad_line(""),
+            pad_line("                            Press Enter to continue."),
         ]
-
-        content.append(" Press Enter to continue.")
-        content.append("")
 
         return {
             "type": "screen",
             "screen": "dspsyssts",
+            "cols": 80,
             "content": content,
             "fields": [],
             "activeField": 0,
         }
 
     def _screen_wrkjobq(self, session: Session) -> dict:
-        """Work with Job Queues screen."""
+        """Work with Job Queues - 80 columns."""
         hostname, date_str, time_str = get_system_info()
-        timestamp = f"{date_str}  {time_str}"
-
         queues = self._get_celery_queues()
 
         content = [
-            f" {hostname}                   Work with Job Queues                   {session.user}",
-            f"                                                          {timestamp}",
-            "",
-            " Type options, press Enter.",
-            "   5=Work with   6=Hold   7=Release   8=Work with jobs",
-            "",
-            [{"type": "text", "text": " Opt  Queue       Status    Jobs    Held    Subsystem", "class": "field-reverse"}],
+            pad_line(f" {hostname:<20}       Work with Job Queues                  {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   5=Work with   6=Hold queue   7=Release queue   8=Work with jobs"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Queue         Lib         Status      Jobs   Subsystem"), "class": "field-reverse"}],
         ]
 
         fields = []
         for i, q in enumerate(queues[:10]):
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
-                {"type": "text", "text": f" {q['name']:<10} {q['status']:<9} {q['jobs']:>4}    {q['held']:>4}    {q['subsystem']}"},
+                {"type": "text", "text": f"  {q['name']:<12}  {q['lib']:<10}  {q['status']:<10}  {q['jobs']:>4}   {q['subsystem']}"},
             ]
             content.append(row)
-            fields.append({"id": f"opt_{i}", "row": 7 + i, "col": 1})
+            fields.append({"id": f"opt_{i}"})
 
-        while len(content) < 22:
-            content.append("")
+        while len(content) < 20:
+            content.append(pad_line(""))
 
-        if session.message:
-            content.append([{"type": "text", "text": f" {session.message}", "class": f"field-{session.message_level}"}])
-            session.message = ""
-        else:
-            content.append("")
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
 
         content.append([
             {"type": "text", "text": " ===> "},
-            {"type": "input", "id": "cmd", "width": 50},
+            {"type": "input", "id": "cmd", "width": 66},
         ])
-        fields.append({"id": "cmd", "row": 24, "col": 7})
+        fields.append({"id": "cmd"})
+        content.append(pad_line(""))
 
         return {
             "type": "screen",
             "screen": "wrkjobq",
+            "cols": 80,
             "content": content,
             "fields": fields,
             "activeField": 0,
         }
 
     def _screen_wrksvc(self, session: Session) -> dict:
-        """Work with Services (Docker) screen."""
+        """Work with Services (Docker) - 132 columns for more data."""
         hostname, date_str, time_str = get_system_info()
-        timestamp = f"{date_str}  {time_str}"
-
         services = self._get_docker_services()
 
         content = [
-            f" {hostname}                    Work with Services                    {session.user}",
-            f"                                                          {timestamp}",
-            "",
-            " Type options, press Enter.",
-            "   2=Start   3=Stop   4=Restart   5=Logs   8=Details",
-            "",
-            [{"type": "text", "text": " Opt  Service       Status   Elapsed     Image            Ports", "class": "field-reverse"}],
+            pad_line(f" {hostname:<20}                       Work with Services                                    {session.user:>10}", 132),
+            pad_line(f"                                                                                          {date_str}  {time_str}", 132),
+            pad_line("", 132),
+            pad_line(" Type options, press Enter.", 132),
+            pad_line("   2=Start   3=Stop   4=Restart   5=Display logs   8=Display details", 132),
+            pad_line("", 132),
+            [{"type": "text", "text": pad_line(" Opt  Service          Status     Elapsed      Image                    Ports", 132), "class": "field-reverse"}],
         ]
 
         fields = []
-        for i, svc in enumerate(services[:12]):
+        for i, svc in enumerate(services[:15]):
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
-                {"type": "text", "text": f" {svc['name']:<12} {svc['status']:<8} {svc['elapsed']:<10} {svc['image']:<16} {svc['ports']}"},
+                {"type": "text", "text": f"  {svc['name']:<15}  {svc['status']:<9}  {svc['elapsed']:<10}   {svc['image']:<23}  {svc['ports']:<30}"},
             ]
             content.append(row)
-            fields.append({"id": f"opt_{i}", "row": 7 + i, "col": 1})
+            fields.append({"id": f"opt_{i}"})
 
         while len(content) < 22:
-            content.append("")
+            content.append(pad_line("", 132))
 
-        if session.message:
-            content.append([{"type": "text", "text": f" {session.message}", "class": f"field-{session.message_level}"}])
-            session.message = ""
-        else:
-            content.append("")
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}", 132))
+        session.message = ""
 
         content.append([
             {"type": "text", "text": " ===> "},
-            {"type": "input", "id": "cmd", "width": 50},
+            {"type": "input", "id": "cmd", "width": 120},
         ])
-        fields.append({"id": "cmd", "row": 24, "col": 7})
+        fields.append({"id": "cmd"})
+        content.append(pad_line("", 132))
 
         return {
             "type": "screen",
             "screen": "wrksvc",
+            "cols": 132,
             "content": content,
             "fields": fields,
             "activeField": 0,
@@ -491,7 +476,7 @@ class ScreenManager:
             return self.execute_command(session, cmd)
 
         services = self._get_docker_services()
-        for i, svc in enumerate(services[:12]):
+        for i, svc in enumerate(services[:15]):
             opt = fields.get(f'opt_{i}', '').strip()
             if opt == '2':
                 self._docker_action(svc['name'], 'start')
@@ -512,17 +497,15 @@ class ScreenManager:
         return self.get_screen(session, 'wrksvc')
 
     def _screen_dsplog(self, session: Session) -> dict:
-        """Display Log screen."""
+        """Display Log - 132 columns for full log messages."""
         hostname, date_str, time_str = get_system_info()
-        timestamp = f"{date_str}  {time_str}"
-
         logs = self._get_system_logs()
 
         content = [
-            f" {hostname}                      Display Log                          {session.user}",
-            f"                                                          {timestamp}",
-            "",
-            [{"type": "text", "text": " Time      Sev    Source    Message", "class": "field-reverse"}],
+            pad_line(f" {hostname:<20}                          Display Log                                       {session.user:>10}", 132),
+            pad_line(f"                                                                                          {date_str}  {time_str}", 132),
+            pad_line("", 132),
+            [{"type": "text", "text": pad_line(" Time       Severity  Source       Message", 132), "class": "field-reverse"}],
         ]
 
         for log in logs[:18]:
@@ -532,78 +515,79 @@ class ScreenManager:
             elif log['severity'] == 'WARN':
                 css_class = "field-warning"
 
-            row = [{"type": "text", "text": f" {log['time']:<9} {log['severity']:<6} {log['source']:<9} {log['message'][:50]}", "class": css_class}]
-            content.append(row)
+            line = f" {log['time']:<10} {log['severity']:<8}  {log['source']:<10}   {log['message']:<90}"
+            content.append([{"type": "text", "text": pad_line(line, 132), "class": css_class}])
 
         while len(content) < 23:
-            content.append("")
+            content.append(pad_line("", 132))
 
-        content.append(" F5=Refresh   PageUp/PageDown to scroll")
+        content.append(pad_line(" F3=Exit   F5=Refresh   PageUp/PageDown to scroll", 132))
+        content.append(pad_line("", 132))
 
         return {
             "type": "screen",
             "screen": "dsplog",
+            "cols": 132,
             "content": content,
             "fields": [],
             "activeField": 0,
         }
 
     def _screen_sbmjob(self, session: Session) -> dict:
-        """Submit Job screen."""
+        """Submit Job - 80 columns."""
         hostname, date_str, time_str = get_system_info()
-        timestamp = f"{date_str}  {time_str}"
-
         tasks = self._get_available_tasks()
 
         content = [
-            f" {hostname}                       Submit Job                          {session.user}",
-            f"                                                          {timestamp}",
-            "",
-            " Type choices, press Enter.",
-            "",
+            pad_line(f" {hostname:<20}            Submit Job (SBMJOB)                {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
             [
-                {"type": "text", "text": " Command to run  . . . . . . . :  "},
-                {"type": "input", "id": "task", "width": 30, "value": session.field_values.get('task', '')},
+                {"type": "text", "text": " Command to run  . . . . . . . . :  "},
+                {"type": "input", "id": "task", "width": 35},
             ],
             [
-                {"type": "text", "text": " Parameters  . . . . . . . . . :  "},
-                {"type": "input", "id": "params", "width": 30},
+                {"type": "text", "text": " Parameters  . . . . . . . . . . :  "},
+                {"type": "input", "id": "params", "width": 35},
             ],
             [
-                {"type": "text", "text": " Job queue . . . . . . . . . . :  "},
+                {"type": "text", "text": " Job queue . . . . . . . . . . . :  "},
                 {"type": "input", "id": "queue", "width": 15, "value": "celery"},
             ],
             [
-                {"type": "text", "text": " Delay (seconds) . . . . . . . :  "},
-                {"type": "input", "id": "delay", "width": 5, "value": "0"},
+                {"type": "text", "text": " Delay (seconds) . . . . . . . . :  "},
+                {"type": "input", "id": "delay", "width": 6, "value": "0"},
             ],
-            "",
-            " Available commands:",
+            pad_line(""),
+            pad_line(" Available tasks:"),
         ]
 
-        for task in tasks[:8]:
-            content.append(f"   {task}")
+        for task in tasks[:6]:
+            content.append(pad_line(f"   {task}"))
 
-        while len(content) < 22:
-            content.append("")
+        while len(content) < 21:
+            content.append(pad_line(""))
 
-        if session.message:
-            content.append([{"type": "text", "text": f" {session.message}", "class": f"field-{session.message_level}"}])
-            session.message = ""
-        else:
-            content.append("")
+        msg = session.message if session.message else ""
+        css_class = f"field-{session.message_level}" if session.message_level else ""
+        content.append([{"type": "text", "text": pad_line(f" {msg}"), "class": css_class}])
+        session.message = ""
 
-        content.append("")
+        content.append(pad_line(""))
+        content.append(pad_line(""))
 
         return {
             "type": "screen",
             "screen": "sbmjob",
+            "cols": 80,
             "content": content,
             "fields": [
-                {"id": "task", "row": 5, "col": 35},
-                {"id": "params", "row": 6, "col": 35},
-                {"id": "queue", "row": 7, "col": 35},
-                {"id": "delay", "row": 8, "col": 35},
+                {"id": "task"},
+                {"id": "params"},
+                {"id": "queue"},
+                {"id": "delay"},
             ],
             "activeField": 0,
         }
@@ -624,12 +608,12 @@ class ScreenManager:
             session.message = f"Job submitted: {result_id[:8]}"
             session.message_level = "info"
         except Exception as e:
-            session.message = f"Error: {str(e)[:40]}"
+            session.message = f"Error: {str(e)[:50]}"
             session.message_level = "error"
 
         return self.get_screen(session, 'sbmjob')
 
-    # ========== DATA FETCHING HELPERS ==========
+    # ========== DATA HELPERS ==========
 
     def _get_celery_jobs(self) -> list[dict]:
         """Get active Celery jobs."""
@@ -641,26 +625,28 @@ class ScreenManager:
             active = inspect.active() or {}
             for worker, tasks in active.items():
                 for task in tasks:
+                    name = task.get('name', 'UNKNOWN')
                     jobs.append({
-                        'name': task.get('name', 'UNKNOWN')[-10:].upper(),
+                        'name': name.split('.')[-1][:10].upper(),
                         'user': 'QBATCH',
                         'type': 'BCH',
                         'status': 'ACTIVE',
                         'cpu': '0.1',
-                        'function': task.get('name', '')[-20:],
+                        'function': name.split('.')[-1][:15],
                         'task_id': task.get('id'),
                     })
 
             reserved = inspect.reserved() or {}
             for worker, tasks in reserved.items():
                 for task in tasks:
+                    name = task.get('name', 'UNKNOWN')
                     jobs.append({
-                        'name': task.get('name', 'UNKNOWN')[-10:].upper(),
+                        'name': name.split('.')[-1][:10].upper(),
                         'user': 'QBATCH',
                         'type': 'BCH',
                         'status': 'JOBQ',
                         'cpu': '0.0',
-                        'function': task.get('name', '')[-20:],
+                        'function': name.split('.')[-1][:15],
                         'task_id': task.get('id'),
                     })
         except Exception:
@@ -704,7 +690,7 @@ class ScreenManager:
             'base_act': 200,
             'interact_pool': 512,
             'interact_act': 50,
-            'spool_pool': 256,
+            'spool_pool': 128,
             'spool_act': 10,
             'celery_active': 0,
             'celery_reserved': 0,
@@ -712,15 +698,13 @@ class ScreenManager:
         }
 
         try:
-            # CPU from /proc/loadavg
             with open('/proc/loadavg', 'r') as f:
                 load = float(f.read().split()[0])
-                stats['cpu_pct'] = min(load * 10, 100)
+                stats['cpu_pct'] = min(load * 25, 100)
         except Exception:
             pass
 
         try:
-            # Memory from /proc/meminfo
             with open('/proc/meminfo', 'r') as f:
                 meminfo = {}
                 for line in f:
@@ -741,7 +725,6 @@ class ScreenManager:
             pass
 
         try:
-            # Disk usage
             result = subprocess.run(['df', '/'], capture_output=True, text=True)
             if result.returncode == 0:
                 lines = result.stdout.strip().split('\n')
@@ -754,12 +737,10 @@ class ScreenManager:
             pass
 
         try:
-            # Celery stats
             app = get_celery_app()
             inspect = app.control.inspect()
             active = inspect.active() or {}
             reserved = inspect.reserved() or {}
-
             stats['celery_active'] = sum(len(tasks) for tasks in active.values())
             stats['celery_reserved'] = sum(len(tasks) for tasks in reserved.values())
             stats['jobs_in_system'] = stats['celery_active'] + stats['celery_reserved'] + 1
@@ -767,10 +748,9 @@ class ScreenManager:
             pass
 
         try:
-            # Docker containers
             result = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True, timeout=5)
-            if result.returncode == 0:
-                stats['docker_containers'] = len(result.stdout.strip().split('\n')) if result.stdout.strip() else 0
+            if result.returncode == 0 and result.stdout.strip():
+                stats['docker_containers'] = len(result.stdout.strip().split('\n'))
         except Exception:
             pass
 
@@ -779,15 +759,14 @@ class ScreenManager:
     def _get_celery_queues(self) -> list[dict]:
         """Get Celery queue information."""
         queues = [
-            {'name': 'celery', 'status': 'ACTIVE', 'jobs': 0, 'held': 0, 'subsystem': 'QBATCH'},
-            {'name': 'default', 'status': 'ACTIVE', 'jobs': 0, 'held': 0, 'subsystem': 'QBATCH'},
+            {'name': 'CELERY', 'lib': 'QGPL', 'status': 'ACTIVE', 'jobs': 0, 'subsystem': 'QBATCH'},
+            {'name': 'DEFAULT', 'lib': 'QGPL', 'status': 'ACTIVE', 'jobs': 0, 'subsystem': 'QBATCH'},
         ]
 
         try:
             app = get_celery_app()
             inspect = app.control.inspect()
             reserved = inspect.reserved() or {}
-
             for worker, tasks in reserved.items():
                 queues[0]['jobs'] += len(tasks)
         except Exception:
@@ -811,14 +790,14 @@ class ScreenManager:
                         continue
                     parts = line.split('\t')
                     if len(parts) >= 3:
-                        name = parts[0][:12].upper()
+                        name = parts[0][:15].upper()
                         status_raw = parts[1]
-                        image = parts[2].split(':')[0].split('/')[-1][:16]
-                        ports = parts[3][:20] if len(parts) > 3 else ''
+                        image = parts[2].split(':')[0].split('/')[-1][:23]
+                        ports = parts[3][:30] if len(parts) > 3 else ''
 
                         if 'Up' in status_raw:
                             status = 'ACTIVE'
-                            elapsed = status_raw.replace('Up ', '').split(' ')[0]
+                            elapsed = status_raw.replace('Up ', '').split(' ')[0][:10]
                         elif 'Exited' in status_raw:
                             status = 'ENDED'
                             elapsed = ''
@@ -829,7 +808,7 @@ class ScreenManager:
                         services.append({
                             'name': name,
                             'status': status,
-                            'elapsed': elapsed[:10],
+                            'elapsed': elapsed,
                             'image': image,
                             'ports': ports,
                         })
@@ -865,7 +844,7 @@ class ScreenManager:
             )
             output = result.stderr or result.stdout
             if output:
-                for line in output.strip().split('\n')[-20:]:
+                for line in output.strip().split('\n')[-18:]:
                     if line.strip():
                         severity = 'INFO'
                         if 'ERROR' in line.upper():
@@ -877,7 +856,7 @@ class ScreenManager:
                             'time': datetime.now().strftime('%H:%M:%S'),
                             'severity': severity,
                             'source': 'QBATCH',
-                            'message': line[-60:],
+                            'message': line[:90],
                         })
         except Exception:
             pass
@@ -911,7 +890,7 @@ class ScreenManager:
         if not tasks:
             tasks = ['dk400.ping', 'dk400.echo', 'dk400.delay']
 
-        return sorted(tasks)
+        return sorted(tasks)[:10]
 
     def _submit_celery_task(self, task_name: str, params: str, delay: int) -> str:
         """Submit a Celery task."""
@@ -923,7 +902,7 @@ class ScreenManager:
                 import json
                 args = json.loads(params)
             else:
-                args = [p.strip() for p in params.split(',')]
+                args = [p.strip() for p in params.split(',') if p.strip()]
 
         sig = app.signature(task_name, args=args)
 
