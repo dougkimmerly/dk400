@@ -116,6 +116,257 @@ INSERT INTO system_values (name, value, description, category) VALUES
     ('QTIMSEP', ':', 'Time separator character', 'DATETIME'),
     ('QDATSEP', '/', 'Date separator character', 'DATETIME')
 ON CONFLICT (name) DO NOTHING;
+
+-- =============================================================================
+-- Message Queues (AS/400 MSGQ)
+-- =============================================================================
+
+-- Message queues table
+CREATE TABLE IF NOT EXISTS message_queues (
+    name VARCHAR(10) PRIMARY KEY,
+    description VARCHAR(50) DEFAULT '',
+    queue_type VARCHAR(10) DEFAULT '*STD',     -- *STD, *SYSOPR
+    max_size INTEGER DEFAULT 1000,
+    created_by VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Messages in queues
+CREATE TABLE IF NOT EXISTS messages (
+    id SERIAL PRIMARY KEY,
+    queue_name VARCHAR(10) NOT NULL REFERENCES message_queues(name) ON DELETE CASCADE,
+    msg_id VARCHAR(7) DEFAULT '',              -- Message ID (e.g., CPF1234)
+    msg_type VARCHAR(10) DEFAULT '*INFO',      -- *INFO, *INQ, *COMP, *DIAG, *ESCAPE
+    msg_text VARCHAR(512) NOT NULL,
+    msg_data TEXT,                             -- Additional data/parameters
+    severity INTEGER DEFAULT 0,                -- 0-99
+    sent_by VARCHAR(10),
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    reply VARCHAR(256),                        -- For *INQ messages
+    replied_at TIMESTAMP,
+    status VARCHAR(10) DEFAULT '*NEW'          -- *NEW, *OLD, *ANSWERED
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_queue ON messages(queue_name, status);
+CREATE INDEX IF NOT EXISTS idx_messages_sent ON messages(sent_at);
+
+-- Default message queues
+INSERT INTO message_queues (name, description, queue_type, created_by) VALUES
+    ('QSYSOPR', 'System Operator Message Queue', '*SYSOPR', 'SYSTEM'),
+    ('QSYSMSG', 'System Message Queue', '*STD', 'SYSTEM')
+ON CONFLICT (name) DO NOTHING;
+
+-- =============================================================================
+-- Data Areas (AS/400 DTAARA)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS data_areas (
+    name VARCHAR(10) NOT NULL,
+    library VARCHAR(10) NOT NULL DEFAULT '*LIBL',
+    type VARCHAR(10) DEFAULT '*CHAR',          -- *CHAR, *DEC, *LGL
+    length INTEGER DEFAULT 2000,
+    decimal_positions INTEGER DEFAULT 0,
+    value TEXT DEFAULT '',
+    description VARCHAR(50) DEFAULT '',
+    locked_by VARCHAR(10),                     -- User who has exclusive lock
+    locked_at TIMESTAMP,
+    created_by VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by VARCHAR(10),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (name, library)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dtaara_library ON data_areas(library);
+
+-- Default data areas
+INSERT INTO data_areas (name, library, type, length, value, description, created_by) VALUES
+    ('QDATE', '*LIBL', '*CHAR', 8, '', 'System date data area', 'SYSTEM'),
+    ('QTIME', '*LIBL', '*CHAR', 6, '', 'System time data area', 'SYSTEM')
+ON CONFLICT (name, library) DO NOTHING;
+
+-- =============================================================================
+-- Job Descriptions (AS/400 JOBD)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS job_descriptions (
+    name VARCHAR(10) NOT NULL,
+    library VARCHAR(10) NOT NULL DEFAULT '*LIBL',
+    description VARCHAR(50) DEFAULT '',
+    job_queue VARCHAR(10) DEFAULT 'QBATCH',    -- Default job queue
+    job_priority INTEGER DEFAULT 5,            -- 1-9
+    output_queue VARCHAR(10) DEFAULT '*USRPRF',
+    print_device VARCHAR(10) DEFAULT '*USRPRF',
+    routing_data VARCHAR(80) DEFAULT 'QCMDB',
+    request_data VARCHAR(256) DEFAULT '',
+    user_profile VARCHAR(10) DEFAULT '*RQD',   -- User to run as
+    accounting_code VARCHAR(15) DEFAULT '',
+    log_level INTEGER DEFAULT 4,               -- 0-4
+    log_severity INTEGER DEFAULT 20,           -- 0-99
+    log_text VARCHAR(10) DEFAULT '*MSG',       -- *MSG, *SECLVL, *NOLIST
+    hold_on_jobq VARCHAR(10) DEFAULT '*NO',    -- *YES, *NO
+    created_by VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (name, library)
+);
+
+-- Default job descriptions
+INSERT INTO job_descriptions (name, library, description, job_queue, job_priority, created_by) VALUES
+    ('QBATCH', '*LIBL', 'Default batch job description', 'QBATCH', 5, 'SYSTEM'),
+    ('QINTER', '*LIBL', 'Interactive job description', 'QINTER', 2, 'SYSTEM'),
+    ('QSPL', '*LIBL', 'Spooling job description', 'QSPL', 5, 'SYSTEM')
+ON CONFLICT (name, library) DO NOTHING;
+
+-- =============================================================================
+-- Output Queues and Spooled Files (AS/400 OUTQ/SPLF)
+-- =============================================================================
+
+-- Output queues
+CREATE TABLE IF NOT EXISTS output_queues (
+    name VARCHAR(10) NOT NULL,
+    library VARCHAR(10) NOT NULL DEFAULT '*LIBL',
+    description VARCHAR(50) DEFAULT '',
+    status VARCHAR(10) DEFAULT '*RLS',         -- *RLS, *HLD
+    max_size INTEGER DEFAULT 0,                -- 0 = unlimited
+    authority VARCHAR(10) DEFAULT '*USE',
+    created_by VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (name, library)
+);
+
+-- Spooled files (job output)
+CREATE TABLE IF NOT EXISTS spooled_files (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(10) NOT NULL,
+    file_number INTEGER NOT NULL DEFAULT 1,
+    job_name VARCHAR(28) NOT NULL,             -- job/user/number format
+    job_id VARCHAR(36),                        -- Celery task ID
+    output_queue VARCHAR(10) DEFAULT 'QPRINT',
+    status VARCHAR(10) DEFAULT '*RDY',         -- *RDY, *HLD, *PND, *PRT, *SAV
+    user_data VARCHAR(10) DEFAULT '',
+    form_type VARCHAR(10) DEFAULT '*STD',
+    copies INTEGER DEFAULT 1,
+    pages INTEGER DEFAULT 0,
+    total_records INTEGER DEFAULT 0,
+    content TEXT,                              -- Actual spooled output
+    created_by VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_splf_job ON spooled_files(job_name);
+CREATE INDEX IF NOT EXISTS idx_splf_outq ON spooled_files(output_queue, status);
+CREATE INDEX IF NOT EXISTS idx_splf_user ON spooled_files(created_by);
+
+-- Default output queues
+INSERT INTO output_queues (name, library, description, created_by) VALUES
+    ('QPRINT', '*LIBL', 'Default print output queue', 'SYSTEM'),
+    ('QPRINT2', '*LIBL', 'Secondary print output queue', 'SYSTEM')
+ON CONFLICT (name, library) DO NOTHING;
+
+-- =============================================================================
+-- Job Schedule Entries (AS/400 WRKJOBSCDE)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS job_schedule_entries (
+    name VARCHAR(20) PRIMARY KEY,
+    description VARCHAR(50) DEFAULT '',
+    command TEXT NOT NULL,                     -- Command/task to run
+    job_description VARCHAR(10) DEFAULT 'QBATCH',
+    frequency VARCHAR(10) DEFAULT '*ONCE',     -- *ONCE, *WEEKLY, *MONTHLY, *DAILY
+    schedule_date DATE,                        -- For *ONCE
+    schedule_time TIME,
+    days_of_week VARCHAR(20),                  -- For *WEEKLY: 'MON,TUE,WED' etc
+    day_of_month INTEGER,                      -- For *MONTHLY: 1-31
+    relative_day VARCHAR(10),                  -- *FIRST, *SECOND, *THIRD, *FOURTH, *LAST
+    relative_weekday VARCHAR(10),              -- Day for relative (MON, TUE, etc)
+    status VARCHAR(10) DEFAULT '*ACTIVE',      -- *ACTIVE, *HELD
+    last_run_at TIMESTAMP,
+    last_run_status VARCHAR(10),               -- *SUCCESS, *FAILED
+    next_run_at TIMESTAMP,
+    created_by VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by VARCHAR(10),
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobscde_status ON job_schedule_entries(status);
+CREATE INDEX IF NOT EXISTS idx_jobscde_next ON job_schedule_entries(next_run_at);
+
+-- =============================================================================
+-- Authorization Lists (AS/400 AUTL)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS authorization_lists (
+    name VARCHAR(10) PRIMARY KEY,
+    description VARCHAR(50) DEFAULT '',
+    created_by VARCHAR(10),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Users in authorization lists
+CREATE TABLE IF NOT EXISTS authorization_list_entries (
+    autl_name VARCHAR(10) NOT NULL REFERENCES authorization_lists(name) ON DELETE CASCADE,
+    username VARCHAR(10) NOT NULL,
+    authority VARCHAR(10) NOT NULL DEFAULT '*USE',  -- *USE, *CHANGE, *ALL, *EXCLUDE
+    added_by VARCHAR(10),
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (autl_name, username)
+);
+
+-- Objects secured by authorization lists
+CREATE TABLE IF NOT EXISTS authorization_list_objects (
+    autl_name VARCHAR(10) NOT NULL REFERENCES authorization_lists(name) ON DELETE CASCADE,
+    object_type VARCHAR(20) NOT NULL,
+    object_name VARCHAR(128) NOT NULL,
+    added_by VARCHAR(10),
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (autl_name, object_type, object_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_autle_user ON authorization_list_entries(username);
+CREATE INDEX IF NOT EXISTS idx_autlo_object ON authorization_list_objects(object_type, object_name);
+
+-- =============================================================================
+-- Subsystem Descriptions (AS/400 SBSD)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS subsystem_descriptions (
+    name VARCHAR(10) PRIMARY KEY,
+    description VARCHAR(50) DEFAULT '',
+    status VARCHAR(10) DEFAULT '*INACTIVE',    -- *ACTIVE, *INACTIVE
+    max_active_jobs INTEGER DEFAULT 0,         -- 0 = no limit
+    current_jobs INTEGER DEFAULT 0,
+    pool_id VARCHAR(10) DEFAULT '*BASE',
+    celery_queue VARCHAR(50),                  -- Maps to Celery queue name
+    worker_concurrency INTEGER DEFAULT 4,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    started_at TIMESTAMP,
+    stopped_at TIMESTAMP
+);
+
+-- Job queue entries for subsystems
+CREATE TABLE IF NOT EXISTS subsystem_job_queues (
+    subsystem_name VARCHAR(10) NOT NULL REFERENCES subsystem_descriptions(name) ON DELETE CASCADE,
+    job_queue VARCHAR(10) NOT NULL,
+    sequence INTEGER DEFAULT 10,               -- Processing order
+    max_active INTEGER DEFAULT 0,              -- Max jobs from this queue
+    PRIMARY KEY (subsystem_name, job_queue)
+);
+
+-- Default subsystems (map to Celery workers)
+INSERT INTO subsystem_descriptions (name, description, status, celery_queue, worker_concurrency) VALUES
+    ('QBATCH', 'Batch Subsystem', '*ACTIVE', 'celery', 4),
+    ('QINTER', 'Interactive Subsystem', '*ACTIVE', 'interactive', 2),
+    ('QSPL', 'Spooling Subsystem', '*ACTIVE', 'spooling', 1),
+    ('QCTL', 'Controlling Subsystem', '*ACTIVE', NULL, 1)
+ON CONFLICT (name) DO NOTHING;
+
+-- Default job queue assignments
+INSERT INTO subsystem_job_queues (subsystem_name, job_queue, sequence, max_active) VALUES
+    ('QBATCH', 'QBATCH', 10, 4),
+    ('QINTER', 'QINTER', 10, 10),
+    ('QSPL', 'QSPL', 10, 2)
+ON CONFLICT (subsystem_name, job_queue) DO NOTHING;
 """
 
 
@@ -1360,3 +1611,1212 @@ def clear_sysval_cache():
     """Clear the system value cache."""
     global _sysval_cache
     _sysval_cache = {}
+
+
+# =============================================================================
+# Message Queues (AS/400-style MSGQ)
+# =============================================================================
+
+def create_message_queue(name: str, description: str = '', queue_type: str = '*STD',
+                         created_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Create a message queue."""
+    name = name.upper().strip()[:10]
+
+    if not name:
+        return False, "Queue name is required"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO message_queues (name, description, queue_type, created_by)
+                VALUES (%s, %s, %s, %s)
+            """, (name, description, queue_type, created_by))
+        return True, f"Message queue {name} created"
+    except psycopg2.IntegrityError:
+        return False, f"Message queue {name} already exists"
+    except Exception as e:
+        logger.error(f"Failed to create message queue: {e}")
+        return False, f"Failed to create message queue: {e}"
+
+
+def delete_message_queue(name: str) -> tuple[bool, str]:
+    """Delete a message queue."""
+    name = name.upper().strip()
+
+    if name in ('QSYSOPR', 'QSYSMSG'):
+        return False, f"Cannot delete system queue {name}"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("DELETE FROM message_queues WHERE name = %s", (name,))
+            if cursor.rowcount == 0:
+                return False, f"Message queue {name} not found"
+        return True, f"Message queue {name} deleted"
+    except Exception as e:
+        logger.error(f"Failed to delete message queue: {e}")
+        return False, f"Failed to delete message queue: {e}"
+
+
+def list_message_queues() -> list[dict]:
+    """List all message queues."""
+    queues = []
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT mq.*,
+                    (SELECT COUNT(*) FROM messages m WHERE m.queue_name = mq.name AND m.status = '*NEW') as new_count,
+                    (SELECT COUNT(*) FROM messages m WHERE m.queue_name = mq.name) as total_count
+                FROM message_queues mq
+                ORDER BY mq.name
+            """)
+            for row in cursor.fetchall():
+                queues.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to list message queues: {e}")
+    return queues
+
+
+def send_message(queue_name: str, msg_text: str, msg_type: str = '*INFO',
+                 msg_id: str = '', severity: int = 0, sent_by: str = 'SYSTEM',
+                 msg_data: str = None) -> tuple[bool, str]:
+    """Send a message to a queue (SNDMSG)."""
+    queue_name = queue_name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            # Verify queue exists
+            cursor.execute("SELECT 1 FROM message_queues WHERE name = %s", (queue_name,))
+            if not cursor.fetchone():
+                return False, f"Message queue {queue_name} not found"
+
+            cursor.execute("""
+                INSERT INTO messages (queue_name, msg_id, msg_type, msg_text, msg_data, severity, sent_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (queue_name, msg_id, msg_type, msg_text, msg_data, severity, sent_by))
+        return True, "Message sent"
+    except Exception as e:
+        logger.error(f"Failed to send message: {e}")
+        return False, f"Failed to send message: {e}"
+
+
+def get_messages(queue_name: str, status: str = None, limit: int = 50) -> list[dict]:
+    """Get messages from a queue (DSPMSG)."""
+    queue_name = queue_name.upper().strip()
+    messages = []
+
+    try:
+        with get_cursor() as cursor:
+            if status:
+                cursor.execute("""
+                    SELECT * FROM messages
+                    WHERE queue_name = %s AND status = %s
+                    ORDER BY sent_at DESC LIMIT %s
+                """, (queue_name, status, limit))
+            else:
+                cursor.execute("""
+                    SELECT * FROM messages
+                    WHERE queue_name = %s
+                    ORDER BY sent_at DESC LIMIT %s
+                """, (queue_name, limit))
+            for row in cursor.fetchall():
+                messages.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to get messages: {e}")
+    return messages
+
+
+def mark_message_old(message_id: int) -> tuple[bool, str]:
+    """Mark a message as old/read."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE messages SET status = '*OLD' WHERE id = %s AND status = '*NEW'",
+                (message_id,)
+            )
+        return True, "Message marked as read"
+    except Exception as e:
+        return False, f"Failed to update message: {e}"
+
+
+def reply_to_message(message_id: int, reply: str, replied_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Reply to an inquiry message."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE messages
+                SET reply = %s, replied_at = CURRENT_TIMESTAMP, status = '*ANSWERED'
+                WHERE id = %s AND msg_type = '*INQ'
+            """, (reply, message_id))
+            if cursor.rowcount == 0:
+                return False, "Message not found or not an inquiry"
+        return True, "Reply sent"
+    except Exception as e:
+        return False, f"Failed to reply: {e}"
+
+
+def delete_message(message_id: int) -> tuple[bool, str]:
+    """Delete a message."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("DELETE FROM messages WHERE id = %s", (message_id,))
+        return True, "Message deleted"
+    except Exception as e:
+        return False, f"Failed to delete message: {e}"
+
+
+def clear_message_queue(queue_name: str) -> tuple[bool, str]:
+    """Clear all messages from a queue."""
+    queue_name = queue_name.upper().strip()
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("DELETE FROM messages WHERE queue_name = %s", (queue_name,))
+            count = cursor.rowcount
+        return True, f"Cleared {count} messages from {queue_name}"
+    except Exception as e:
+        return False, f"Failed to clear queue: {e}"
+
+
+# =============================================================================
+# Data Areas (AS/400-style DTAARA)
+# =============================================================================
+
+def create_data_area(name: str, library: str = '*LIBL', type: str = '*CHAR',
+                     length: int = 2000, decimal_positions: int = 0,
+                     value: str = '', description: str = '',
+                     created_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Create a data area (CRTDTAARA)."""
+    name = name.upper().strip()[:10]
+    library = library.upper().strip()[:10] or '*LIBL'
+
+    if not name:
+        return False, "Data area name is required"
+
+    if type not in ('*CHAR', '*DEC', '*LGL'):
+        return False, "Type must be *CHAR, *DEC, or *LGL"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO data_areas (name, library, type, length, decimal_positions,
+                                        value, description, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (name, library, type, length, decimal_positions, value, description, created_by))
+        return True, f"Data area {library}/{name} created"
+    except psycopg2.IntegrityError:
+        return False, f"Data area {library}/{name} already exists"
+    except Exception as e:
+        logger.error(f"Failed to create data area: {e}")
+        return False, f"Failed to create data area: {e}"
+
+
+def delete_data_area(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+    """Delete a data area (DLTDTAARA)."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    if name in ('QDATE', 'QTIME'):
+        return False, f"Cannot delete system data area {name}"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM data_areas WHERE name = %s AND library = %s",
+                (name, library)
+            )
+            if cursor.rowcount == 0:
+                return False, f"Data area {library}/{name} not found"
+        return True, f"Data area {library}/{name} deleted"
+    except Exception as e:
+        return False, f"Failed to delete data area: {e}"
+
+
+def get_data_area(name: str, library: str = '*LIBL') -> dict | None:
+    """Get a data area (RTVDTAARA)."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM data_areas WHERE name = %s AND library = %s",
+                (name, library)
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.error(f"Failed to get data area: {e}")
+    return None
+
+
+def change_data_area(name: str, library: str = '*LIBL', value: str = None,
+                     updated_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Change a data area value (CHGDTAARA)."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    try:
+        with get_cursor() as cursor:
+            # Check if locked by another user
+            cursor.execute(
+                "SELECT locked_by FROM data_areas WHERE name = %s AND library = %s",
+                (name, library)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False, f"Data area {library}/{name} not found"
+
+            if row['locked_by'] and row['locked_by'] != updated_by:
+                return False, f"Data area locked by {row['locked_by']}"
+
+            cursor.execute("""
+                UPDATE data_areas
+                SET value = %s, updated_by = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE name = %s AND library = %s
+            """, (value, updated_by, name, library))
+        return True, f"Data area {library}/{name} changed"
+    except Exception as e:
+        return False, f"Failed to change data area: {e}"
+
+
+def lock_data_area(name: str, library: str = '*LIBL', locked_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Lock a data area for exclusive use."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT locked_by FROM data_areas WHERE name = %s AND library = %s",
+                (name, library)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False, f"Data area {library}/{name} not found"
+
+            if row['locked_by'] and row['locked_by'] != locked_by:
+                return False, f"Data area already locked by {row['locked_by']}"
+
+            cursor.execute("""
+                UPDATE data_areas
+                SET locked_by = %s, locked_at = CURRENT_TIMESTAMP
+                WHERE name = %s AND library = %s
+            """, (locked_by, name, library))
+        return True, f"Data area {library}/{name} locked"
+    except Exception as e:
+        return False, f"Failed to lock data area: {e}"
+
+
+def unlock_data_area(name: str, library: str = '*LIBL', unlocked_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Unlock a data area."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT locked_by FROM data_areas WHERE name = %s AND library = %s",
+                (name, library)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False, f"Data area {library}/{name} not found"
+
+            # Only the locker or QSECOFR can unlock
+            if row['locked_by'] and row['locked_by'] != unlocked_by:
+                # Check if unlocked_by is SECOFR
+                cursor.execute(
+                    "SELECT user_class FROM users WHERE username = %s",
+                    (unlocked_by,)
+                )
+                user_row = cursor.fetchone()
+                if not user_row or user_row['user_class'] != '*SECOFR':
+                    return False, f"Data area locked by {row['locked_by']}"
+
+            cursor.execute("""
+                UPDATE data_areas SET locked_by = NULL, locked_at = NULL
+                WHERE name = %s AND library = %s
+            """, (name, library))
+        return True, f"Data area {library}/{name} unlocked"
+    except Exception as e:
+        return False, f"Failed to unlock data area: {e}"
+
+
+def list_data_areas(library: str = None) -> list[dict]:
+    """List data areas (WRKDTAARA)."""
+    areas = []
+    try:
+        with get_cursor() as cursor:
+            if library:
+                cursor.execute(
+                    "SELECT * FROM data_areas WHERE library = %s ORDER BY name",
+                    (library.upper(),)
+                )
+            else:
+                cursor.execute("SELECT * FROM data_areas ORDER BY library, name")
+            for row in cursor.fetchall():
+                areas.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to list data areas: {e}")
+    return areas
+
+
+# =============================================================================
+# Job Descriptions (AS/400-style JOBD)
+# =============================================================================
+
+def create_job_description(name: str, library: str = '*LIBL', description: str = '',
+                           job_queue: str = 'QBATCH', job_priority: int = 5,
+                           output_queue: str = '*USRPRF', user_profile: str = '*RQD',
+                           hold_on_jobq: str = '*NO', created_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Create a job description (CRTJOBD)."""
+    name = name.upper().strip()[:10]
+    library = library.upper().strip()[:10] or '*LIBL'
+
+    if not name:
+        return False, "Job description name is required"
+
+    if job_priority < 1 or job_priority > 9:
+        return False, "Job priority must be 1-9"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO job_descriptions (name, library, description, job_queue,
+                                              job_priority, output_queue, user_profile,
+                                              hold_on_jobq, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (name, library, description, job_queue, job_priority,
+                  output_queue, user_profile, hold_on_jobq, created_by))
+        return True, f"Job description {library}/{name} created"
+    except psycopg2.IntegrityError:
+        return False, f"Job description {library}/{name} already exists"
+    except Exception as e:
+        return False, f"Failed to create job description: {e}"
+
+
+def delete_job_description(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+    """Delete a job description (DLTJOBD)."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    if name in ('QBATCH', 'QINTER', 'QSPL'):
+        return False, f"Cannot delete system job description {name}"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM job_descriptions WHERE name = %s AND library = %s",
+                (name, library)
+            )
+            if cursor.rowcount == 0:
+                return False, f"Job description {library}/{name} not found"
+        return True, f"Job description {library}/{name} deleted"
+    except Exception as e:
+        return False, f"Failed to delete job description: {e}"
+
+
+def get_job_description(name: str, library: str = '*LIBL') -> dict | None:
+    """Get a job description."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM job_descriptions WHERE name = %s AND library = %s",
+                (name, library)
+            )
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.error(f"Failed to get job description: {e}")
+    return None
+
+
+def list_job_descriptions(library: str = None) -> list[dict]:
+    """List job descriptions (WRKJOBD)."""
+    jobds = []
+    try:
+        with get_cursor() as cursor:
+            if library:
+                cursor.execute(
+                    "SELECT * FROM job_descriptions WHERE library = %s ORDER BY name",
+                    (library.upper(),)
+                )
+            else:
+                cursor.execute("SELECT * FROM job_descriptions ORDER BY library, name")
+            for row in cursor.fetchall():
+                jobds.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to list job descriptions: {e}")
+    return jobds
+
+
+def change_job_description(name: str, library: str = '*LIBL', **kwargs) -> tuple[bool, str]:
+    """Change a job description (CHGJOBD)."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    allowed_fields = ['description', 'job_queue', 'job_priority', 'output_queue',
+                      'user_profile', 'hold_on_jobq', 'log_level', 'log_severity']
+
+    updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+
+    if not updates:
+        return False, "No changes specified"
+
+    try:
+        with get_cursor() as cursor:
+            set_clause = ', '.join(f"{k} = %s" for k in updates.keys())
+            values = list(updates.values()) + [name, library]
+            cursor.execute(f"""
+                UPDATE job_descriptions SET {set_clause}
+                WHERE name = %s AND library = %s
+            """, values)
+            if cursor.rowcount == 0:
+                return False, f"Job description {library}/{name} not found"
+        return True, f"Job description {library}/{name} changed"
+    except Exception as e:
+        return False, f"Failed to change job description: {e}"
+
+
+# =============================================================================
+# Output Queues and Spooled Files (AS/400-style OUTQ/SPLF)
+# =============================================================================
+
+def create_output_queue(name: str, library: str = '*LIBL', description: str = '',
+                        created_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Create an output queue (CRTOUTQ)."""
+    name = name.upper().strip()[:10]
+    library = library.upper().strip()[:10] or '*LIBL'
+
+    if not name:
+        return False, "Output queue name is required"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO output_queues (name, library, description, created_by)
+                VALUES (%s, %s, %s, %s)
+            """, (name, library, description, created_by))
+        return True, f"Output queue {library}/{name} created"
+    except psycopg2.IntegrityError:
+        return False, f"Output queue {library}/{name} already exists"
+    except Exception as e:
+        return False, f"Failed to create output queue: {e}"
+
+
+def delete_output_queue(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+    """Delete an output queue (DLTOUTQ)."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    if name in ('QPRINT', 'QPRINT2'):
+        return False, f"Cannot delete system output queue {name}"
+
+    try:
+        with get_cursor() as cursor:
+            # Check for spooled files
+            cursor.execute(
+                "SELECT COUNT(*) as cnt FROM spooled_files WHERE output_queue = %s",
+                (name,)
+            )
+            if cursor.fetchone()['cnt'] > 0:
+                return False, f"Output queue {name} contains spooled files"
+
+            cursor.execute(
+                "DELETE FROM output_queues WHERE name = %s AND library = %s",
+                (name, library)
+            )
+            if cursor.rowcount == 0:
+                return False, f"Output queue {library}/{name} not found"
+        return True, f"Output queue {library}/{name} deleted"
+    except Exception as e:
+        return False, f"Failed to delete output queue: {e}"
+
+
+def list_output_queues(library: str = None) -> list[dict]:
+    """List output queues (WRKOUTQ)."""
+    queues = []
+    try:
+        with get_cursor() as cursor:
+            if library:
+                cursor.execute("""
+                    SELECT oq.*,
+                        (SELECT COUNT(*) FROM spooled_files sf WHERE sf.output_queue = oq.name) as file_count
+                    FROM output_queues oq
+                    WHERE oq.library = %s
+                    ORDER BY oq.name
+                """, (library.upper(),))
+            else:
+                cursor.execute("""
+                    SELECT oq.*,
+                        (SELECT COUNT(*) FROM spooled_files sf WHERE sf.output_queue = oq.name) as file_count
+                    FROM output_queues oq
+                    ORDER BY oq.library, oq.name
+                """)
+            for row in cursor.fetchall():
+                queues.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to list output queues: {e}")
+    return queues
+
+
+def hold_output_queue(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+    """Hold an output queue (HLDOUTQ)."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE output_queues SET status = '*HLD'
+                WHERE name = %s AND library = %s
+            """, (name, library))
+            if cursor.rowcount == 0:
+                return False, f"Output queue {library}/{name} not found"
+        return True, f"Output queue {library}/{name} held"
+    except Exception as e:
+        return False, f"Failed to hold output queue: {e}"
+
+
+def release_output_queue(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+    """Release an output queue (RLSOUTQ)."""
+    name = name.upper().strip()
+    library = library.upper().strip() or '*LIBL'
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE output_queues SET status = '*RLS'
+                WHERE name = %s AND library = %s
+            """, (name, library))
+            if cursor.rowcount == 0:
+                return False, f"Output queue {library}/{name} not found"
+        return True, f"Output queue {library}/{name} released"
+    except Exception as e:
+        return False, f"Failed to release output queue: {e}"
+
+
+def create_spooled_file(name: str, job_name: str, content: str, job_id: str = None,
+                        output_queue: str = 'QPRINT', user_data: str = '',
+                        created_by: str = 'SYSTEM') -> tuple[bool, str, int]:
+    """Create a spooled file (job output)."""
+    name = name.upper().strip()[:10]
+
+    try:
+        with get_cursor() as cursor:
+            # Get next file number for this job
+            cursor.execute(
+                "SELECT COALESCE(MAX(file_number), 0) + 1 as next_num FROM spooled_files WHERE job_name = %s",
+                (job_name,)
+            )
+            file_number = cursor.fetchone()['next_num']
+
+            # Count pages (lines / 60)
+            pages = max(1, len(content.split('\n')) // 60)
+            total_records = len(content.split('\n'))
+
+            cursor.execute("""
+                INSERT INTO spooled_files (name, file_number, job_name, job_id, output_queue,
+                                           user_data, pages, total_records, content, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (name, file_number, job_name, job_id, output_queue, user_data,
+                  pages, total_records, content, created_by))
+            splf_id = cursor.fetchone()['id']
+        return True, f"Spooled file {name} created", splf_id
+    except Exception as e:
+        return False, f"Failed to create spooled file: {e}", 0
+
+
+def get_spooled_file(splf_id: int) -> dict | None:
+    """Get a spooled file by ID."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("SELECT * FROM spooled_files WHERE id = %s", (splf_id,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.error(f"Failed to get spooled file: {e}")
+    return None
+
+
+def list_spooled_files(user: str = None, output_queue: str = None, job_name: str = None) -> list[dict]:
+    """List spooled files (WRKSPLF)."""
+    files = []
+    try:
+        with get_cursor() as cursor:
+            query = "SELECT * FROM spooled_files WHERE 1=1"
+            params = []
+
+            if user:
+                query += " AND created_by = %s"
+                params.append(user.upper())
+            if output_queue:
+                query += " AND output_queue = %s"
+                params.append(output_queue.upper())
+            if job_name:
+                query += " AND job_name = %s"
+                params.append(job_name)
+
+            query += " ORDER BY created_at DESC"
+
+            cursor.execute(query, params)
+            for row in cursor.fetchall():
+                result = dict(row)
+                # Don't include full content in list
+                result.pop('content', None)
+                files.append(result)
+    except Exception as e:
+        logger.error(f"Failed to list spooled files: {e}")
+    return files
+
+
+def delete_spooled_file(splf_id: int) -> tuple[bool, str]:
+    """Delete a spooled file (DLTSPLF)."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("DELETE FROM spooled_files WHERE id = %s", (splf_id,))
+            if cursor.rowcount == 0:
+                return False, "Spooled file not found"
+        return True, "Spooled file deleted"
+    except Exception as e:
+        return False, f"Failed to delete spooled file: {e}"
+
+
+def hold_spooled_file(splf_id: int) -> tuple[bool, str]:
+    """Hold a spooled file (HLDSPLF)."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE spooled_files SET status = '*HLD' WHERE id = %s",
+                (splf_id,)
+            )
+            if cursor.rowcount == 0:
+                return False, "Spooled file not found"
+        return True, "Spooled file held"
+    except Exception as e:
+        return False, f"Failed to hold spooled file: {e}"
+
+
+def release_spooled_file(splf_id: int) -> tuple[bool, str]:
+    """Release a spooled file (RLSSPLF)."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE spooled_files SET status = '*RDY' WHERE id = %s",
+                (splf_id,)
+            )
+            if cursor.rowcount == 0:
+                return False, "Spooled file not found"
+        return True, "Spooled file released"
+    except Exception as e:
+        return False, f"Failed to release spooled file: {e}"
+
+
+# =============================================================================
+# Job Schedule Entries (AS/400-style WRKJOBSCDE)
+# =============================================================================
+
+def add_job_schedule_entry(name: str, command: str, description: str = '',
+                           frequency: str = '*DAILY', schedule_time: str = '00:00',
+                           days_of_week: str = None, day_of_month: int = None,
+                           schedule_date: str = None, job_description: str = 'QBATCH',
+                           created_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Add a job schedule entry (ADDJOBSCDE)."""
+    name = name.upper().strip()[:20]
+
+    if not name:
+        return False, "Schedule entry name is required"
+
+    if not command:
+        return False, "Command is required"
+
+    if frequency not in ('*ONCE', '*DAILY', '*WEEKLY', '*MONTHLY'):
+        return False, "Frequency must be *ONCE, *DAILY, *WEEKLY, or *MONTHLY"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO job_schedule_entries (name, description, command, job_description,
+                                                  frequency, schedule_time, days_of_week,
+                                                  day_of_month, schedule_date, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (name, description, command, job_description, frequency,
+                  schedule_time, days_of_week, day_of_month, schedule_date, created_by))
+        return True, f"Job schedule entry {name} added"
+    except psycopg2.IntegrityError:
+        return False, f"Job schedule entry {name} already exists"
+    except Exception as e:
+        return False, f"Failed to add job schedule entry: {e}"
+
+
+def remove_job_schedule_entry(name: str) -> tuple[bool, str]:
+    """Remove a job schedule entry (RMVJOBSCDE)."""
+    name = name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("DELETE FROM job_schedule_entries WHERE name = %s", (name,))
+            if cursor.rowcount == 0:
+                return False, f"Job schedule entry {name} not found"
+        return True, f"Job schedule entry {name} removed"
+    except Exception as e:
+        return False, f"Failed to remove job schedule entry: {e}"
+
+
+def get_job_schedule_entry(name: str) -> dict | None:
+    """Get a job schedule entry."""
+    name = name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("SELECT * FROM job_schedule_entries WHERE name = %s", (name,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.error(f"Failed to get job schedule entry: {e}")
+    return None
+
+
+def list_job_schedule_entries(status: str = None) -> list[dict]:
+    """List job schedule entries (WRKJOBSCDE)."""
+    entries = []
+    try:
+        with get_cursor() as cursor:
+            if status:
+                cursor.execute(
+                    "SELECT * FROM job_schedule_entries WHERE status = %s ORDER BY name",
+                    (status.upper(),)
+                )
+            else:
+                cursor.execute("SELECT * FROM job_schedule_entries ORDER BY name")
+            for row in cursor.fetchall():
+                entries.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to list job schedule entries: {e}")
+    return entries
+
+
+def hold_job_schedule_entry(name: str) -> tuple[bool, str]:
+    """Hold a job schedule entry (HLDJOBSCDE)."""
+    name = name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE job_schedule_entries SET status = '*HELD' WHERE name = %s",
+                (name,)
+            )
+            if cursor.rowcount == 0:
+                return False, f"Job schedule entry {name} not found"
+        return True, f"Job schedule entry {name} held"
+    except Exception as e:
+        return False, f"Failed to hold job schedule entry: {e}"
+
+
+def release_job_schedule_entry(name: str) -> tuple[bool, str]:
+    """Release a job schedule entry (RLSJOBSCDE)."""
+    name = name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "UPDATE job_schedule_entries SET status = '*ACTIVE' WHERE name = %s",
+                (name,)
+            )
+            if cursor.rowcount == 0:
+                return False, f"Job schedule entry {name} not found"
+        return True, f"Job schedule entry {name} released"
+    except Exception as e:
+        return False, f"Failed to release job schedule entry: {e}"
+
+
+def change_job_schedule_entry(name: str, **kwargs) -> tuple[bool, str]:
+    """Change a job schedule entry (CHGJOBSCDE)."""
+    name = name.upper().strip()
+
+    allowed_fields = ['description', 'command', 'frequency', 'schedule_time',
+                      'days_of_week', 'day_of_month', 'schedule_date', 'job_description']
+
+    updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+
+    if not updates:
+        return False, "No changes specified"
+
+    updates['updated_at'] = 'CURRENT_TIMESTAMP'
+    updates['updated_by'] = kwargs.get('updated_by', 'SYSTEM')
+
+    try:
+        with get_cursor() as cursor:
+            set_parts = []
+            values = []
+            for k, v in updates.items():
+                if v == 'CURRENT_TIMESTAMP':
+                    set_parts.append(f"{k} = CURRENT_TIMESTAMP")
+                else:
+                    set_parts.append(f"{k} = %s")
+                    values.append(v)
+
+            values.append(name)
+            cursor.execute(f"""
+                UPDATE job_schedule_entries SET {', '.join(set_parts)}
+                WHERE name = %s
+            """, values)
+            if cursor.rowcount == 0:
+                return False, f"Job schedule entry {name} not found"
+        return True, f"Job schedule entry {name} changed"
+    except Exception as e:
+        return False, f"Failed to change job schedule entry: {e}"
+
+
+# =============================================================================
+# Authorization Lists (AS/400-style AUTL)
+# =============================================================================
+
+def create_authorization_list(name: str, description: str = '',
+                              created_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Create an authorization list (CRTAUTL)."""
+    name = name.upper().strip()[:10]
+
+    if not name:
+        return False, "Authorization list name is required"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO authorization_lists (name, description, created_by)
+                VALUES (%s, %s, %s)
+            """, (name, description, created_by))
+        return True, f"Authorization list {name} created"
+    except psycopg2.IntegrityError:
+        return False, f"Authorization list {name} already exists"
+    except Exception as e:
+        return False, f"Failed to create authorization list: {e}"
+
+
+def delete_authorization_list(name: str) -> tuple[bool, str]:
+    """Delete an authorization list (DLTAUTL)."""
+    name = name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("DELETE FROM authorization_lists WHERE name = %s", (name,))
+            if cursor.rowcount == 0:
+                return False, f"Authorization list {name} not found"
+        return True, f"Authorization list {name} deleted"
+    except Exception as e:
+        return False, f"Failed to delete authorization list: {e}"
+
+
+def list_authorization_lists() -> list[dict]:
+    """List authorization lists (WRKAUTL)."""
+    lists = []
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT al.*,
+                    (SELECT COUNT(*) FROM authorization_list_entries e WHERE e.autl_name = al.name) as user_count,
+                    (SELECT COUNT(*) FROM authorization_list_objects o WHERE o.autl_name = al.name) as object_count
+                FROM authorization_lists al
+                ORDER BY al.name
+            """)
+            for row in cursor.fetchall():
+                lists.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to list authorization lists: {e}")
+    return lists
+
+
+def add_authorization_list_entry(autl_name: str, username: str, authority: str = '*USE',
+                                  added_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Add a user to an authorization list (ADDAUTLE)."""
+    autl_name = autl_name.upper().strip()
+    username = username.upper().strip()
+    authority = authority.upper().strip()
+
+    if authority not in ('*USE', '*CHANGE', '*ALL', '*EXCLUDE'):
+        return False, "Authority must be *USE, *CHANGE, *ALL, or *EXCLUDE"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO authorization_list_entries (autl_name, username, authority, added_by)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (autl_name, username) DO UPDATE SET authority = %s
+            """, (autl_name, username, authority, added_by, authority))
+        return True, f"User {username} added to {autl_name} with {authority}"
+    except psycopg2.IntegrityError:
+        return False, f"Authorization list {autl_name} not found"
+    except Exception as e:
+        return False, f"Failed to add entry: {e}"
+
+
+def remove_authorization_list_entry(autl_name: str, username: str) -> tuple[bool, str]:
+    """Remove a user from an authorization list (RMVAUTLE)."""
+    autl_name = autl_name.upper().strip()
+    username = username.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM authorization_list_entries WHERE autl_name = %s AND username = %s",
+                (autl_name, username)
+            )
+            if cursor.rowcount == 0:
+                return False, f"Entry not found"
+        return True, f"User {username} removed from {autl_name}"
+    except Exception as e:
+        return False, f"Failed to remove entry: {e}"
+
+
+def get_authorization_list_entries(autl_name: str) -> list[dict]:
+    """Get users in an authorization list."""
+    autl_name = autl_name.upper().strip()
+    entries = []
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM authorization_list_entries
+                WHERE autl_name = %s ORDER BY username
+            """, (autl_name,))
+            for row in cursor.fetchall():
+                entries.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to get authorization list entries: {e}")
+    return entries
+
+
+def add_object_to_authorization_list(autl_name: str, object_type: str, object_name: str,
+                                      added_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Add an object to an authorization list."""
+    autl_name = autl_name.upper().strip()
+    object_type = object_type.upper().strip()
+    object_name = object_name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO authorization_list_objects (autl_name, object_type, object_name, added_by)
+                VALUES (%s, %s, %s, %s)
+            """, (autl_name, object_type, object_name, added_by))
+        return True, f"Object {object_name} added to {autl_name}"
+    except psycopg2.IntegrityError:
+        return False, f"Object already in list or authorization list not found"
+    except Exception as e:
+        return False, f"Failed to add object: {e}"
+
+
+def remove_object_from_authorization_list(autl_name: str, object_type: str,
+                                           object_name: str) -> tuple[bool, str]:
+    """Remove an object from an authorization list."""
+    autl_name = autl_name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                DELETE FROM authorization_list_objects
+                WHERE autl_name = %s AND object_type = %s AND object_name = %s
+            """, (autl_name, object_type.upper(), object_name.upper()))
+            if cursor.rowcount == 0:
+                return False, "Object not found in list"
+        return True, f"Object removed from {autl_name}"
+    except Exception as e:
+        return False, f"Failed to remove object: {e}"
+
+
+def get_authorization_list_objects(autl_name: str) -> list[dict]:
+    """Get objects secured by an authorization list."""
+    autl_name = autl_name.upper().strip()
+    objects = []
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM authorization_list_objects
+                WHERE autl_name = %s ORDER BY object_type, object_name
+            """, (autl_name,))
+            for row in cursor.fetchall():
+                objects.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to get authorization list objects: {e}")
+    return objects
+
+
+# =============================================================================
+# Subsystem Descriptions (AS/400-style SBSD)
+# =============================================================================
+
+def create_subsystem_description(name: str, description: str = '',
+                                  celery_queue: str = None, worker_concurrency: int = 4,
+                                  max_active_jobs: int = 0) -> tuple[bool, str]:
+    """Create a subsystem description (CRTSBSD)."""
+    name = name.upper().strip()[:10]
+
+    if not name:
+        return False, "Subsystem name is required"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO subsystem_descriptions (name, description, celery_queue,
+                                                    worker_concurrency, max_active_jobs)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (name, description, celery_queue, worker_concurrency, max_active_jobs))
+        return True, f"Subsystem description {name} created"
+    except psycopg2.IntegrityError:
+        return False, f"Subsystem {name} already exists"
+    except Exception as e:
+        return False, f"Failed to create subsystem: {e}"
+
+
+def delete_subsystem_description(name: str) -> tuple[bool, str]:
+    """Delete a subsystem description (DLTSBSD)."""
+    name = name.upper().strip()
+
+    if name in ('QBATCH', 'QINTER', 'QSPL', 'QCTL'):
+        return False, f"Cannot delete system subsystem {name}"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("DELETE FROM subsystem_descriptions WHERE name = %s", (name,))
+            if cursor.rowcount == 0:
+                return False, f"Subsystem {name} not found"
+        return True, f"Subsystem {name} deleted"
+    except Exception as e:
+        return False, f"Failed to delete subsystem: {e}"
+
+
+def get_subsystem_description(name: str) -> dict | None:
+    """Get a subsystem description."""
+    name = name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("SELECT * FROM subsystem_descriptions WHERE name = %s", (name,))
+            row = cursor.fetchone()
+            if row:
+                return dict(row)
+    except Exception as e:
+        logger.error(f"Failed to get subsystem: {e}")
+    return None
+
+
+def list_subsystem_descriptions() -> list[dict]:
+    """List subsystem descriptions (WRKSBSD)."""
+    subsystems = []
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT sd.*,
+                    (SELECT COUNT(*) FROM subsystem_job_queues jq WHERE jq.subsystem_name = sd.name) as jobq_count
+                FROM subsystem_descriptions sd
+                ORDER BY sd.name
+            """)
+            for row in cursor.fetchall():
+                subsystems.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to list subsystems: {e}")
+    return subsystems
+
+
+def start_subsystem(name: str) -> tuple[bool, str]:
+    """Start a subsystem (STRSBS)."""
+    name = name.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE subsystem_descriptions
+                SET status = '*ACTIVE', started_at = CURRENT_TIMESTAMP, stopped_at = NULL
+                WHERE name = %s
+            """, (name,))
+            if cursor.rowcount == 0:
+                return False, f"Subsystem {name} not found"
+        return True, f"Subsystem {name} started"
+    except Exception as e:
+        return False, f"Failed to start subsystem: {e}"
+
+
+def end_subsystem(name: str, option: str = '*CNTRLD') -> tuple[bool, str]:
+    """End a subsystem (ENDSBS)."""
+    name = name.upper().strip()
+
+    if name == 'QCTL':
+        return False, "Cannot end controlling subsystem"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                UPDATE subsystem_descriptions
+                SET status = '*INACTIVE', stopped_at = CURRENT_TIMESTAMP
+                WHERE name = %s
+            """, (name,))
+            if cursor.rowcount == 0:
+                return False, f"Subsystem {name} not found"
+        return True, f"Subsystem {name} ended"
+    except Exception as e:
+        return False, f"Failed to end subsystem: {e}"
+
+
+def add_job_queue_entry(subsystem_name: str, job_queue: str, sequence: int = 10,
+                        max_active: int = 0) -> tuple[bool, str]:
+    """Add a job queue entry to a subsystem (ADDJOBQE)."""
+    subsystem_name = subsystem_name.upper().strip()
+    job_queue = job_queue.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO subsystem_job_queues (subsystem_name, job_queue, sequence, max_active)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (subsystem_name, job_queue) DO UPDATE
+                SET sequence = %s, max_active = %s
+            """, (subsystem_name, job_queue, sequence, max_active, sequence, max_active))
+        return True, f"Job queue {job_queue} added to {subsystem_name}"
+    except psycopg2.IntegrityError:
+        return False, f"Subsystem {subsystem_name} not found"
+    except Exception as e:
+        return False, f"Failed to add job queue entry: {e}"
+
+
+def remove_job_queue_entry(subsystem_name: str, job_queue: str) -> tuple[bool, str]:
+    """Remove a job queue entry from a subsystem (RMVJOBQE)."""
+    subsystem_name = subsystem_name.upper().strip()
+    job_queue = job_queue.upper().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM subsystem_job_queues WHERE subsystem_name = %s AND job_queue = %s",
+                (subsystem_name, job_queue)
+            )
+            if cursor.rowcount == 0:
+                return False, "Job queue entry not found"
+        return True, f"Job queue {job_queue} removed from {subsystem_name}"
+    except Exception as e:
+        return False, f"Failed to remove job queue entry: {e}"
+
+
+def get_subsystem_job_queues(subsystem_name: str) -> list[dict]:
+    """Get job queues for a subsystem."""
+    subsystem_name = subsystem_name.upper().strip()
+    queues = []
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM subsystem_job_queues
+                WHERE subsystem_name = %s ORDER BY sequence
+            """, (subsystem_name,))
+            for row in cursor.fetchall():
+                queues.append(dict(row))
+    except Exception as e:
+        logger.error(f"Failed to get subsystem job queues: {e}")
+    return queues

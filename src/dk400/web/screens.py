@@ -17,7 +17,36 @@ from src.dk400.web.database import (
     create_schema, drop_schema, list_schemas, list_schema_tables,
     grant_object_authority, revoke_object_authority, get_object_authorities,
     get_effective_authorities, get_user_group, AUTHORITY_GRANTS,
-    get_system_value, set_system_value, list_system_values
+    get_system_value, set_system_value, list_system_values,
+    # Message Queues
+    create_message_queue, delete_message_queue, list_message_queues,
+    send_message, get_messages, mark_message_old, reply_to_message,
+    delete_message, clear_message_queue,
+    # Data Areas
+    create_data_area, delete_data_area, get_data_area, change_data_area,
+    lock_data_area, unlock_data_area, list_data_areas,
+    # Job Descriptions
+    create_job_description, delete_job_description, get_job_description,
+    list_job_descriptions, change_job_description,
+    # Output Queues and Spooled Files
+    create_output_queue, delete_output_queue, list_output_queues,
+    hold_output_queue, release_output_queue,
+    create_spooled_file, get_spooled_file, list_spooled_files,
+    delete_spooled_file, hold_spooled_file, release_spooled_file,
+    # Job Schedule Entries
+    add_job_schedule_entry, remove_job_schedule_entry, get_job_schedule_entry,
+    list_job_schedule_entries, hold_job_schedule_entry, release_job_schedule_entry,
+    change_job_schedule_entry,
+    # Authorization Lists
+    create_authorization_list, delete_authorization_list, list_authorization_lists,
+    add_authorization_list_entry, remove_authorization_list_entry,
+    get_authorization_list_entries, add_object_to_authorization_list,
+    remove_object_from_authorization_list, get_authorization_list_objects,
+    # Subsystem Descriptions
+    create_subsystem_description, delete_subsystem_description,
+    get_subsystem_description, list_subsystem_descriptions,
+    start_subsystem, end_subsystem, add_job_queue_entry,
+    remove_job_queue_entry, get_subsystem_job_queues,
 )
 
 
@@ -134,6 +163,34 @@ class ScreenManager:
         'WRKSYSVAL': 'wrksysval',
         'DSPSYSVAL': 'wrksysval',  # Alias
         'CHGSYSVAL': 'chgsysval',
+        # Message Queues
+        'WRKMSGQ': 'wrkmsgq',
+        'DSPMSG': 'dspmsg',
+        'SNDMSG': 'sndmsg',
+        # Data Areas
+        'WRKDTAARA': 'wrkdtaara',
+        'DSPDTAARA': 'dspdtaara',
+        'CRTDTAARA': 'crtdtaara',
+        'CHGDTAARA': 'chgdtaara',
+        # Job Descriptions
+        'WRKJOBD': 'wrkjobd',
+        'DSPJOBD': 'dspjobd',
+        'CRTJOBD': 'crtjobd',
+        # Output Queues and Spooled Files
+        'WRKOUTQ': 'wrkoutq',
+        'WRKSPLF': 'wrksplf',
+        'DSPSPLF': 'dspsplf',
+        # Job Schedule Entries
+        'WRKJOBSCDE': 'wrkjobscde',
+        'ADDJOBSCDE': 'addjobscde',
+        # Authorization Lists
+        'WRKAUTL': 'wrkautl',
+        'DSPAUTL': 'dspautl',
+        'CRTAUTL': 'crtautl',
+        # Subsystem Descriptions
+        'WRKSBSD': 'wrksbsd',
+        'STRSBS': 'strsbs',
+        'ENDSBS': 'endsbs',
         'SIGNOFF': 'signon',
         'GO': 'main',
         '1': 'wrkactjob',
@@ -199,6 +256,33 @@ class ScreenManager:
             elif screen == 'wrkschema':
                 # F6=Create on Work with Schemas
                 return self.get_screen(session, 'schema_create')
+            elif screen == 'wrkmsgq':
+                # F6=Create on Work with Message Queues
+                return self.get_screen(session, 'crtmsgq')
+            elif screen == 'dspmsg':
+                # F6=Send message
+                return self.get_screen(session, 'sndmsg')
+            elif screen == 'wrkdtaara':
+                # F6=Create on Work with Data Areas
+                return self.get_screen(session, 'crtdtaara')
+            elif screen == 'wrkjobd':
+                # F6=Create on Work with Job Descriptions
+                return self.get_screen(session, 'crtjobd')
+            elif screen == 'wrkoutq':
+                # F6=Create on Work with Output Queues
+                return self.get_screen(session, 'crtoutq')
+            elif screen == 'wrkjobscde':
+                # F6=Add on Work with Job Schedule Entries
+                return self.get_screen(session, 'addjobscde')
+            elif screen == 'wrkautl':
+                # F6=Create on Work with Authorization Lists
+                return self.get_screen(session, 'crtautl')
+            elif screen == 'wrkautlent':
+                # F6=Add entry
+                return self.get_screen(session, 'addautlent')
+            elif screen == 'wrksbsd':
+                # F6=Create on Work with Subsystems
+                return self.get_screen(session, 'crtsbsd')
         elif key == 'F7':
             # Screen-specific F7 handling
             if screen == 'wrkalr':
@@ -229,6 +313,33 @@ class ScreenManager:
                 return self.get_screen(session, 'wrkschema')
             elif screen in ('grtobjaut', 'rvkobjaut', 'dspobjaut'):
                 return self.get_screen(session, 'wrkschema')
+            # Message Queue screens
+            elif screen in ('dspmsg', 'sndmsg', 'crtmsgq', 'msgq_detail'):
+                return self.get_screen(session, 'wrkmsgq')
+            # Data Area screens
+            elif screen in ('dspdtaara', 'crtdtaara', 'chgdtaara'):
+                return self.get_screen(session, 'wrkdtaara')
+            # Job Description screens
+            elif screen in ('dspjobd', 'crtjobd', 'chgjobd'):
+                return self.get_screen(session, 'wrkjobd')
+            # Output Queue screens
+            elif screen in ('wrksplf', 'crtoutq'):
+                return self.get_screen(session, 'wrkoutq')
+            elif screen == 'dspsplf':
+                return self.get_screen(session, 'wrksplf')
+            # Job Schedule Entry screens
+            elif screen in ('dspjobscde', 'addjobscde'):
+                return self.get_screen(session, 'wrkjobscde')
+            # Authorization List screens
+            elif screen in ('dspautl', 'crtautl'):
+                return self.get_screen(session, 'wrkautl')
+            elif screen == 'wrkautlent':
+                return self.get_screen(session, 'wrkautl')
+            elif screen == 'addautlent':
+                return self.get_screen(session, 'wrkautlent')
+            # Subsystem screens
+            elif screen in ('dspsbsd', 'crtsbsd', 'strsbs', 'endsbs'):
+                return self.get_screen(session, 'wrksbsd')
             return self.get_screen(session, 'main')
 
         return self.get_screen(session, screen)
@@ -3515,3 +3626,1265 @@ class ScreenManager:
         if success:
             return self.get_screen(session, 'wrksysval')
         return self.get_screen(session, 'chgsysval')
+
+    # ========================================
+    # MESSAGE QUEUE SCREENS
+    # ========================================
+
+    def _screen_wrkmsgq(self, session: Session) -> dict:
+        """Work with Message Queues screen."""
+        queues = list_message_queues()
+
+        lines = [
+            self._center_text("Work with Message Queues", session.display_cols),
+            "",
+            "Type options, press Enter.",
+            "  2=Display   4=Delete   5=Display messages   6=Send message",
+            "",
+            "Opt  Queue      Type     Size  Description",
+        ]
+
+        for q in queues:
+            lines.append(f"___  {q['name']:<10} {q['queue_type']:<8} {q.get('message_count', 0):>4}  {q['description'][:30]}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh  F6=Create")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "wrkmsgq",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(queues))],
+            "activeField": 0 if queues else None,
+        }
+
+    def _submit_wrkmsgq(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Message Queues submission."""
+        queues = list_message_queues()
+
+        for i, q in enumerate(queues):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                queue_name = q['name']
+                if opt == '2':
+                    session.field_values['selected_msgq'] = queue_name
+                    return self.get_screen(session, 'msgq_detail')
+                elif opt == '4':
+                    success, msg = delete_message_queue(queue_name)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                    return self.get_screen(session, 'wrkmsgq')
+                elif opt == '5':
+                    session.field_values['selected_msgq'] = queue_name
+                    return self.get_screen(session, 'dspmsg')
+                elif opt == '6':
+                    session.field_values['selected_msgq'] = queue_name
+                    return self.get_screen(session, 'sndmsg')
+
+        return self.get_screen(session, 'wrkmsgq')
+
+    def _screen_dspmsg(self, session: Session) -> dict:
+        """Display Messages screen."""
+        queue_name = session.field_values.get('selected_msgq', 'QSYSOPR')
+        messages = get_messages(queue_name, limit=20)
+
+        lines = [
+            self._center_text(f"Display Messages - {queue_name}", session.display_cols),
+            "",
+            "Type options, press Enter.",
+            "  4=Remove   5=Reply",
+            "",
+            "Opt  Type      From       Time        Message",
+        ]
+
+        for msg in messages:
+            sent_at = msg.get('sent_at', '')
+            if sent_at:
+                sent_at = str(sent_at)[11:19]  # Just time
+            msg_text = msg.get('msg_text', '')[:35]
+            lines.append(f"___  {msg['msg_type']:<8}  {msg.get('sent_by', ''):<10} {sent_at}  {msg_text}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh  F6=Send message")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "dspmsg",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(messages))],
+            "activeField": 0 if messages else None,
+        }
+
+    def _submit_dspmsg(self, session: Session, fields: dict) -> dict:
+        """Handle Display Messages submission."""
+        queue_name = session.field_values.get('selected_msgq', 'QSYSOPR')
+        messages = get_messages(queue_name, limit=20)
+
+        for i, msg in enumerate(messages):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                msg_id = msg['id']
+                if opt == '4':
+                    success, result = delete_message(queue_name, msg_id)
+                    session.message = result
+                    session.message_level = "info" if success else "error"
+                elif opt == '5':
+                    session.field_values['selected_msg_id'] = msg_id
+                    return self.get_screen(session, 'reply_msg')
+
+        return self.get_screen(session, 'dspmsg')
+
+    def _screen_sndmsg(self, session: Session) -> dict:
+        """Send Message screen."""
+        queue_name = session.field_values.get('selected_msgq', 'QSYSOPR')
+
+        lines = [
+            self._center_text("Send Message", session.display_cols),
+            "",
+            f"Message queue  . . . :  {queue_name}",
+            "",
+            "Type message text, press Enter.",
+            "",
+            "Message type . . . . :  *INFO____  (*INFO, *INQ, *NOTIFY)",
+            "Message text . . . . :",
+            "________________________________________________________________________",
+            "________________________________________________________________________",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "sndmsg",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "msg_type"},
+                {"id": "msg_text"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_sndmsg(self, session: Session, fields: dict) -> dict:
+        """Handle Send Message submission."""
+        queue_name = session.field_values.get('selected_msgq', 'QSYSOPR')
+        msg_type = fields.get('msg_type', '*INFO').strip().upper() or '*INFO'
+        msg_text = fields.get('msg_text', '').strip()
+
+        if not msg_text:
+            session.message = "Message text is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'sndmsg')
+
+        success, msg = send_message(queue_name, msg_text, msg_type=msg_type, sent_by=session.user)
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'dspmsg')
+        return self.get_screen(session, 'sndmsg')
+
+    # ========================================
+    # DATA AREA SCREENS
+    # ========================================
+
+    def _screen_wrkdtaara(self, session: Session) -> dict:
+        """Work with Data Areas screen."""
+        library = session.field_values.get('dtaara_library', '*ALL')
+        dtaaras = list_data_areas(library if library != '*ALL' else None)
+
+        lines = [
+            self._center_text("Work with Data Areas", session.display_cols),
+            "",
+            f"Library  . . . . . :  {library}",
+            "",
+            "Type options, press Enter.",
+            "  2=Display   4=Delete   5=Change",
+            "",
+            "Opt  Data Area   Library    Type   Length  Description",
+        ]
+
+        for d in dtaaras:
+            lines.append(f"___  {d['name']:<10}  {d['library']:<10} {d['type']:<6} {d['length']:>6}  {d['description'][:25]}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh  F6=Create")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "wrkdtaara",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(8, 8 + len(dtaaras))],
+            "activeField": 0 if dtaaras else None,
+        }
+
+    def _submit_wrkdtaara(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Data Areas submission."""
+        library = session.field_values.get('dtaara_library', '*ALL')
+        dtaaras = list_data_areas(library if library != '*ALL' else None)
+
+        for i, d in enumerate(dtaaras):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                if opt == '2':
+                    session.field_values['selected_dtaara'] = d['name']
+                    session.field_values['selected_dtaara_lib'] = d['library']
+                    return self.get_screen(session, 'dspdtaara')
+                elif opt == '4':
+                    success, msg = delete_data_area(d['name'], d['library'])
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                    return self.get_screen(session, 'wrkdtaara')
+                elif opt == '5':
+                    session.field_values['selected_dtaara'] = d['name']
+                    session.field_values['selected_dtaara_lib'] = d['library']
+                    return self.get_screen(session, 'chgdtaara')
+
+        return self.get_screen(session, 'wrkdtaara')
+
+    def _screen_dspdtaara(self, session: Session) -> dict:
+        """Display Data Area screen."""
+        name = session.field_values.get('selected_dtaara', '')
+        library = session.field_values.get('selected_dtaara_lib', '*LIBL')
+        dtaara = get_data_area(name, library)
+
+        if not dtaara:
+            session.message = f"Data area {name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkdtaara')
+
+        lines = [
+            self._center_text("Display Data Area", session.display_cols),
+            "",
+            f"Data area  . . . . :  {dtaara['name']}",
+            f"Library  . . . . . :  {dtaara['library']}",
+            f"Type . . . . . . . :  {dtaara['type']}",
+            f"Length . . . . . . :  {dtaara['length']}",
+            f"Description  . . . :  {dtaara['description']}",
+            "",
+            "Value:",
+            f"  {dtaara['value'][:70]}",
+            "",
+            f"Locked by  . . . . :  {dtaara.get('locked_by') or '*NONE'}",
+            f"Created by . . . . :  {dtaara.get('created_by', '')}",
+            f"Created  . . . . . :  {dtaara.get('created_at', '')}",
+            f"Updated  . . . . . :  {dtaara.get('updated_at', '')}",
+            "",
+            "F3=Exit  F5=Refresh  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "dspdtaara",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": None,
+        }
+
+    def _screen_crtdtaara(self, session: Session) -> dict:
+        """Create Data Area screen."""
+        lines = [
+            self._center_text("Create Data Area (CRTDTAARA)", session.display_cols),
+            "",
+            "Type choices, press Enter.",
+            "",
+            "Data area  . . . . . . . :  __________",
+            "Library  . . . . . . . . :  *LIBL_____  *LIBL, name",
+            "Type . . . . . . . . . . :  *CHAR_____  *CHAR, *DEC, *LGL",
+            "Length . . . . . . . . . :  2000______",
+            "Initial value  . . . . . :  _______________________________________",
+            "Description  . . . . . . :  _______________________________________",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "crtdtaara",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "name"},
+                {"id": "library"},
+                {"id": "type"},
+                {"id": "length"},
+                {"id": "value"},
+                {"id": "description"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_crtdtaara(self, session: Session, fields: dict) -> dict:
+        """Handle Create Data Area submission."""
+        name = fields.get('name', '').strip().upper()
+        library = fields.get('library', '*LIBL').strip().upper() or '*LIBL'
+        dtaara_type = fields.get('type', '*CHAR').strip().upper() or '*CHAR'
+        length = int(fields.get('length', '2000') or '2000')
+        value = fields.get('value', '').strip()
+        description = fields.get('description', '').strip()
+
+        if not name:
+            session.message = "Data area name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'crtdtaara')
+
+        success, msg = create_data_area(
+            name=name,
+            library=library,
+            dtaara_type=dtaara_type,
+            length=length,
+            value=value,
+            description=description,
+            created_by=session.user
+        )
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkdtaara')
+        return self.get_screen(session, 'crtdtaara')
+
+    def _screen_chgdtaara(self, session: Session) -> dict:
+        """Change Data Area screen."""
+        name = session.field_values.get('selected_dtaara', '')
+        library = session.field_values.get('selected_dtaara_lib', '*LIBL')
+        dtaara = get_data_area(name, library)
+
+        if not dtaara:
+            session.message = f"Data area {name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkdtaara')
+
+        current_value = dtaara.get('value', '')
+
+        lines = [
+            self._center_text("Change Data Area (CHGDTAARA)", session.display_cols),
+            "",
+            f"Data area  . . . . :  {name}",
+            f"Library  . . . . . :  {library}",
+            f"Type . . . . . . . :  {dtaara['type']}",
+            f"Length . . . . . . :  {dtaara['length']}",
+            "",
+            "Type new value, press Enter.",
+            "",
+            f"New value  . . . . :  {current_value[:40]}{'_' * max(0, 40 - len(current_value))}",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "chgdtaara",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "new_value"}],
+            "activeField": 0,
+        }
+
+    def _submit_chgdtaara(self, session: Session, fields: dict) -> dict:
+        """Handle Change Data Area submission."""
+        name = session.field_values.get('selected_dtaara', '')
+        library = session.field_values.get('selected_dtaara_lib', '*LIBL')
+        new_value = fields.get('new_value', '').strip()
+
+        success, msg = change_data_area(name, library, value=new_value, updated_by=session.user)
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkdtaara')
+        return self.get_screen(session, 'chgdtaara')
+
+    # ========================================
+    # JOB DESCRIPTION SCREENS
+    # ========================================
+
+    def _screen_wrkjobd(self, session: Session) -> dict:
+        """Work with Job Descriptions screen."""
+        library = session.field_values.get('jobd_library', '*ALL')
+        jobds = list_job_descriptions(library if library != '*ALL' else None)
+
+        lines = [
+            self._center_text("Work with Job Descriptions", session.display_cols),
+            "",
+            f"Library  . . . . . :  {library}",
+            "",
+            "Type options, press Enter.",
+            "  2=Display   4=Delete   5=Change",
+            "",
+            "Opt  Job Desc    Library    Job Queue   Priority  Description",
+        ]
+
+        for j in jobds:
+            lines.append(f"___  {j['name']:<10}  {j['library']:<10} {j['job_queue']:<10} {j['job_priority']:>3}       {j['description'][:20]}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh  F6=Create")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "wrkjobd",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(8, 8 + len(jobds))],
+            "activeField": 0 if jobds else None,
+        }
+
+    def _submit_wrkjobd(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Job Descriptions submission."""
+        library = session.field_values.get('jobd_library', '*ALL')
+        jobds = list_job_descriptions(library if library != '*ALL' else None)
+
+        for i, j in enumerate(jobds):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                if opt == '2':
+                    session.field_values['selected_jobd'] = j['name']
+                    session.field_values['selected_jobd_lib'] = j['library']
+                    return self.get_screen(session, 'dspjobd')
+                elif opt == '4':
+                    success, msg = delete_job_description(j['name'], j['library'])
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                    return self.get_screen(session, 'wrkjobd')
+                elif opt == '5':
+                    session.field_values['selected_jobd'] = j['name']
+                    session.field_values['selected_jobd_lib'] = j['library']
+                    return self.get_screen(session, 'chgjobd')
+
+        return self.get_screen(session, 'wrkjobd')
+
+    def _screen_dspjobd(self, session: Session) -> dict:
+        """Display Job Description screen."""
+        name = session.field_values.get('selected_jobd', '')
+        library = session.field_values.get('selected_jobd_lib', '*LIBL')
+        jobd = get_job_description(name, library)
+
+        if not jobd:
+            session.message = f"Job description {name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkjobd')
+
+        lines = [
+            self._center_text("Display Job Description", session.display_cols),
+            "",
+            f"Job description  . :  {jobd['name']}",
+            f"Library  . . . . . :  {jobd['library']}",
+            f"Description  . . . :  {jobd['description']}",
+            "",
+            "Job attributes:",
+            f"  Job queue  . . . :  {jobd['job_queue']}",
+            f"  Job priority . . :  {jobd['job_priority']}",
+            f"  Output queue . . :  {jobd['output_queue']}",
+            f"  Output priority  :  {jobd.get('output_priority', 5)}",
+            f"  Print device . . :  {jobd.get('print_device', '*USRPRF')}",
+            "",
+            f"  Log level  . . . :  {jobd.get('log_level', 4)}",
+            f"  Log severity . . :  {jobd.get('log_severity', 0)}",
+            f"  Log text . . . . :  {jobd.get('log_text', '*MSG')}",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "dspjobd",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": None,
+        }
+
+    def _screen_crtjobd(self, session: Session) -> dict:
+        """Create Job Description screen."""
+        lines = [
+            self._center_text("Create Job Description (CRTJOBD)", session.display_cols),
+            "",
+            "Type choices, press Enter.",
+            "",
+            "Job description  . . . :  __________",
+            "Library  . . . . . . . :  *LIBL_____  *LIBL, name",
+            "Description  . . . . . :  _______________________________________",
+            "",
+            "Job attributes:",
+            "  Job queue  . . . . . :  QBATCH____",
+            "  Job priority . . . . :  5_        1-9",
+            "  Output queue . . . . :  *USRPRF___",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "crtjobd",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "name"},
+                {"id": "library"},
+                {"id": "description"},
+                {"id": "job_queue"},
+                {"id": "job_priority"},
+                {"id": "output_queue"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_crtjobd(self, session: Session, fields: dict) -> dict:
+        """Handle Create Job Description submission."""
+        name = fields.get('name', '').strip().upper()
+        library = fields.get('library', '*LIBL').strip().upper() or '*LIBL'
+        description = fields.get('description', '').strip()
+        job_queue = fields.get('job_queue', 'QBATCH').strip().upper() or 'QBATCH'
+        job_priority = int(fields.get('job_priority', '5') or '5')
+        output_queue = fields.get('output_queue', '*USRPRF').strip().upper() or '*USRPRF'
+
+        if not name:
+            session.message = "Job description name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'crtjobd')
+
+        success, msg = create_job_description(
+            name=name,
+            library=library,
+            description=description,
+            job_queue=job_queue,
+            job_priority=job_priority,
+            output_queue=output_queue,
+            created_by=session.user
+        )
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkjobd')
+        return self.get_screen(session, 'crtjobd')
+
+    # ========================================
+    # OUTPUT QUEUE AND SPOOLED FILE SCREENS
+    # ========================================
+
+    def _screen_wrkoutq(self, session: Session) -> dict:
+        """Work with Output Queues screen."""
+        outqs = list_output_queues()
+
+        lines = [
+            self._center_text("Work with Output Queues", session.display_cols),
+            "",
+            "Type options, press Enter.",
+            "  2=Display   4=Delete   5=Work with spooled files   8=Hold   9=Release",
+            "",
+            "Opt  Output Queue  Library    Status   Files  Description",
+        ]
+
+        for q in outqs:
+            lines.append(f"___  {q['name']:<12}  {q['library']:<10} {q['status']:<7} {q.get('file_count', 0):>5}  {q['description'][:20]}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh  F6=Create")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "wrkoutq",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(outqs))],
+            "activeField": 0 if outqs else None,
+        }
+
+    def _submit_wrkoutq(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Output Queues submission."""
+        outqs = list_output_queues()
+
+        for i, q in enumerate(outqs):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                if opt == '4':
+                    success, msg = delete_output_queue(q['name'], q['library'])
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                elif opt == '5':
+                    session.field_values['selected_outq'] = q['name']
+                    return self.get_screen(session, 'wrksplf')
+                elif opt == '8':
+                    success, msg = hold_output_queue(q['name'], q['library'])
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                elif opt == '9':
+                    success, msg = release_output_queue(q['name'], q['library'])
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+
+        return self.get_screen(session, 'wrkoutq')
+
+    def _screen_wrksplf(self, session: Session) -> dict:
+        """Work with Spooled Files screen."""
+        user = session.field_values.get('splf_user', '*CURRENT')
+        if user == '*CURRENT':
+            user = session.user
+
+        outq = session.field_values.get('selected_outq')
+        splfs = list_spooled_files(user=user, output_queue=outq)
+
+        lines = [
+            self._center_text("Work with Spooled Files", session.display_cols),
+            "",
+            f"User . . . . . . . :  {user}",
+            "",
+            "Type options, press Enter.",
+            "  2=Display   4=Delete   8=Hold   9=Release",
+            "",
+            "Opt  File       Nbr  Job                Status   Pages  Queue",
+        ]
+
+        for s in splfs:
+            lines.append(f"___  {s['name']:<10} {s['file_number']:>3}  {s['job_name'][:18]:<18} {s['status']:<7} {s.get('pages', 0):>5}  {s['output_queue']}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "wrksplf",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(8, 8 + len(splfs))],
+            "activeField": 0 if splfs else None,
+        }
+
+    def _submit_wrksplf(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Spooled Files submission."""
+        user = session.field_values.get('splf_user', '*CURRENT')
+        if user == '*CURRENT':
+            user = session.user
+
+        outq = session.field_values.get('selected_outq')
+        splfs = list_spooled_files(user=user, output_queue=outq)
+
+        for i, s in enumerate(splfs):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                splf_id = s['id']
+                if opt == '2':
+                    session.field_values['selected_splf'] = splf_id
+                    return self.get_screen(session, 'dspsplf')
+                elif opt == '4':
+                    success, msg = delete_spooled_file(splf_id)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                elif opt == '8':
+                    success, msg = hold_spooled_file(splf_id)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                elif opt == '9':
+                    success, msg = release_spooled_file(splf_id)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+
+        return self.get_screen(session, 'wrksplf')
+
+    def _screen_dspsplf(self, session: Session) -> dict:
+        """Display Spooled File screen."""
+        splf_id = session.field_values.get('selected_splf')
+        splf = get_spooled_file(splf_id) if splf_id else None
+
+        if not splf:
+            session.message = "Spooled file not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrksplf')
+
+        content_lines = (splf.get('content') or '').split('\n')[:20]
+
+        lines = [
+            self._center_text(f"Display Spooled File - {splf['name']}", session.display_cols),
+            "",
+            f"Job  . . . . . . . :  {splf['job_name']}",
+            f"File number  . . . :  {splf['file_number']}",
+            f"Status . . . . . . :  {splf['status']}",
+            "",
+            "-" * 72,
+        ]
+
+        for line in content_lines:
+            lines.append(line[:72])
+
+        lines.append("-" * 72)
+        lines.append("")
+        lines.append("F3=Exit  F12=Cancel")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "dspsplf",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": None,
+        }
+
+    # ========================================
+    # JOB SCHEDULE ENTRY SCREENS
+    # ========================================
+
+    def _screen_wrkjobscde(self, session: Session) -> dict:
+        """Work with Job Schedule Entries screen."""
+        entries = list_job_schedule_entries()
+
+        lines = [
+            self._center_text("Work with Job Schedule Entries", session.display_cols),
+            "",
+            "Type options, press Enter.",
+            "  2=Display   4=Remove   8=Hold   9=Release",
+            "",
+            "Opt  Entry Name         Frequency  Time     Status     Next Run",
+        ]
+
+        for e in entries:
+            sched_time = str(e.get('schedule_time', ''))[:5] if e.get('schedule_time') else ''
+            next_run = str(e.get('next_run_time', ''))[:16] if e.get('next_run_time') else ''
+            lines.append(f"___  {e['name']:<18} {e['frequency']:<10} {sched_time:<8} {e['status']:<10} {next_run}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh  F6=Add")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "wrkjobscde",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(entries))],
+            "activeField": 0 if entries else None,
+        }
+
+    def _submit_wrkjobscde(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Job Schedule Entries submission."""
+        entries = list_job_schedule_entries()
+
+        for i, e in enumerate(entries):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                entry_name = e['name']
+                if opt == '2':
+                    session.field_values['selected_jobscde'] = entry_name
+                    return self.get_screen(session, 'dspjobscde')
+                elif opt == '4':
+                    success, msg = remove_job_schedule_entry(entry_name)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                elif opt == '8':
+                    success, msg = hold_job_schedule_entry(entry_name)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                elif opt == '9':
+                    success, msg = release_job_schedule_entry(entry_name)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+
+        return self.get_screen(session, 'wrkjobscde')
+
+    def _screen_dspjobscde(self, session: Session) -> dict:
+        """Display Job Schedule Entry screen."""
+        name = session.field_values.get('selected_jobscde', '')
+        entry = get_job_schedule_entry(name)
+
+        if not entry:
+            session.message = f"Job schedule entry {name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkjobscde')
+
+        lines = [
+            self._center_text("Display Job Schedule Entry", session.display_cols),
+            "",
+            f"Entry name . . . . :  {entry['name']}",
+            f"Description  . . . :  {entry['description']}",
+            f"Status . . . . . . :  {entry['status']}",
+            "",
+            "Schedule:",
+            f"  Frequency  . . . :  {entry['frequency']}",
+            f"  Time . . . . . . :  {entry.get('schedule_time', '')}",
+            f"  Days . . . . . . :  {entry.get('schedule_days', '*ALL')}",
+            "",
+            "Command:",
+            f"  {entry['command'][:60]}",
+            "",
+            f"Last run . . . . . :  {entry.get('last_run_time', '*NONE')}",
+            f"Next run . . . . . :  {entry.get('next_run_time', '')}",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "dspjobscde",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": None,
+        }
+
+    def _screen_addjobscde(self, session: Session) -> dict:
+        """Add Job Schedule Entry screen."""
+        lines = [
+            self._center_text("Add Job Schedule Entry (ADDJOBSCDE)", session.display_cols),
+            "",
+            "Type choices, press Enter.",
+            "",
+            "Entry name . . . . . . :  __________________",
+            "Description  . . . . . :  _______________________________________",
+            "",
+            "Command  . . . . . . . :  _______________________________________",
+            "",
+            "Schedule:",
+            "  Frequency  . . . . . :  *DAILY____  *ONCE, *DAILY, *WEEKLY, *MONTHLY",
+            "  Time (HH:MM) . . . . :  _____",
+            "  Days . . . . . . . . :  *ALL______  *ALL, *MON, *TUE, etc.",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "addjobscde",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "name"},
+                {"id": "description"},
+                {"id": "command"},
+                {"id": "frequency"},
+                {"id": "time"},
+                {"id": "days"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_addjobscde(self, session: Session, fields: dict) -> dict:
+        """Handle Add Job Schedule Entry submission."""
+        name = fields.get('name', '').strip().upper()
+        description = fields.get('description', '').strip()
+        command = fields.get('command', '').strip()
+        frequency = fields.get('frequency', '*DAILY').strip().upper() or '*DAILY'
+        time_str = fields.get('time', '').strip()
+        days = fields.get('days', '*ALL').strip().upper() or '*ALL'
+
+        if not name:
+            session.message = "Entry name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'addjobscde')
+
+        if not command:
+            session.message = "Command is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'addjobscde')
+
+        success, msg = add_job_schedule_entry(
+            name=name,
+            command=command,
+            frequency=frequency,
+            schedule_time=time_str if time_str else None,
+            schedule_days=days,
+            description=description,
+            created_by=session.user
+        )
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkjobscde')
+        return self.get_screen(session, 'addjobscde')
+
+    # ========================================
+    # AUTHORIZATION LIST SCREENS
+    # ========================================
+
+    def _screen_wrkautl(self, session: Session) -> dict:
+        """Work with Authorization Lists screen."""
+        autls = list_authorization_lists()
+
+        lines = [
+            self._center_text("Work with Authorization Lists", session.display_cols),
+            "",
+            "Type options, press Enter.",
+            "  2=Display   4=Delete   5=Work with entries",
+            "",
+            "Opt  Auth List   Entries  Description",
+        ]
+
+        for a in autls:
+            lines.append(f"___  {a['name']:<10}  {a.get('entry_count', 0):>5}    {a['description'][:35]}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh  F6=Create")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "wrkautl",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(autls))],
+            "activeField": 0 if autls else None,
+        }
+
+    def _submit_wrkautl(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Authorization Lists submission."""
+        autls = list_authorization_lists()
+
+        for i, a in enumerate(autls):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                autl_name = a['name']
+                if opt == '2':
+                    session.field_values['selected_autl'] = autl_name
+                    return self.get_screen(session, 'dspautl')
+                elif opt == '4':
+                    success, msg = delete_authorization_list(autl_name)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                elif opt == '5':
+                    session.field_values['selected_autl'] = autl_name
+                    return self.get_screen(session, 'wrkautlent')
+
+        return self.get_screen(session, 'wrkautl')
+
+    def _screen_dspautl(self, session: Session) -> dict:
+        """Display Authorization List screen."""
+        name = session.field_values.get('selected_autl', '')
+        entries = get_authorization_list_entries(name)
+        objects = get_authorization_list_objects(name)
+
+        lines = [
+            self._center_text(f"Display Authorization List - {name}", session.display_cols),
+            "",
+            "User Entries:",
+            "  User        Authority",
+        ]
+
+        for e in entries:
+            lines.append(f"  {e['username']:<10}  {e['authority']}")
+
+        lines.append("")
+        lines.append("Secured Objects:")
+        lines.append("  Object       Type       Library")
+
+        for o in objects:
+            lines.append(f"  {o['object_name']:<10}  {o['object_type']:<10} {o['object_library']}")
+
+        lines.append("")
+        lines.append("F3=Exit  F12=Cancel")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "dspautl",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": None,
+        }
+
+    def _screen_crtautl(self, session: Session) -> dict:
+        """Create Authorization List screen."""
+        lines = [
+            self._center_text("Create Authorization List (CRTAUTL)", session.display_cols),
+            "",
+            "Type choices, press Enter.",
+            "",
+            "Authorization list . . :  __________",
+            "Description  . . . . . :  _______________________________________",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "crtautl",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "name"},
+                {"id": "description"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_crtautl(self, session: Session, fields: dict) -> dict:
+        """Handle Create Authorization List submission."""
+        name = fields.get('name', '').strip().upper()
+        description = fields.get('description', '').strip()
+
+        if not name:
+            session.message = "Authorization list name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'crtautl')
+
+        success, msg = create_authorization_list(name, description, created_by=session.user)
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkautl')
+        return self.get_screen(session, 'crtautl')
+
+    def _screen_wrkautlent(self, session: Session) -> dict:
+        """Work with Authorization List Entries screen."""
+        autl_name = session.field_values.get('selected_autl', '')
+        entries = get_authorization_list_entries(autl_name)
+
+        lines = [
+            self._center_text(f"Work with Auth List Entries - {autl_name}", session.display_cols),
+            "",
+            "Type options, press Enter.",
+            "  4=Remove   5=Change authority",
+            "",
+            "Opt  User        Authority",
+        ]
+
+        for e in entries:
+            lines.append(f"___  {e['username']:<10}  {e['authority']}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh  F6=Add entry")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "wrkautlent",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(entries))],
+            "activeField": 0 if entries else None,
+        }
+
+    def _submit_wrkautlent(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Authorization List Entries submission."""
+        autl_name = session.field_values.get('selected_autl', '')
+        entries = get_authorization_list_entries(autl_name)
+
+        for i, e in enumerate(entries):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                if opt == '4':
+                    success, msg = remove_authorization_list_entry(autl_name, e['username'])
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+
+        return self.get_screen(session, 'wrkautlent')
+
+    # ========================================
+    # SUBSYSTEM DESCRIPTION SCREENS
+    # ========================================
+
+    def _screen_wrksbsd(self, session: Session) -> dict:
+        """Work with Subsystem Descriptions screen."""
+        sbsds = list_subsystem_descriptions()
+
+        lines = [
+            self._center_text("Work with Subsystem Descriptions", session.display_cols),
+            "",
+            "Type options, press Enter.",
+            "  2=Display   4=Delete   8=Start   9=End",
+            "",
+            "Opt  Subsystem   Status      Workers  Queue           Description",
+        ]
+
+        for s in sbsds:
+            lines.append(f"___  {s['name']:<10} {s['status']:<10} {s.get('worker_concurrency', 0):>5}    {s.get('celery_queue', ''):<15} {s['description'][:15]}")
+
+        lines.append("")
+        lines.append("                                                                  Bottom")
+        lines.append("F3=Exit  F5=Refresh  F6=Create")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "wrksbsd",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(sbsds))],
+            "activeField": 0 if sbsds else None,
+        }
+
+    def _submit_wrksbsd(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Subsystem Descriptions submission."""
+        sbsds = list_subsystem_descriptions()
+
+        for i, s in enumerate(sbsds):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                sbs_name = s['name']
+                if opt == '2':
+                    session.field_values['selected_sbsd'] = sbs_name
+                    return self.get_screen(session, 'dspsbsd')
+                elif opt == '4':
+                    success, msg = delete_subsystem_description(sbs_name)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                elif opt == '8':
+                    success, msg = start_subsystem(sbs_name)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                elif opt == '9':
+                    success, msg = end_subsystem(sbs_name)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+
+        return self.get_screen(session, 'wrksbsd')
+
+    def _screen_dspsbsd(self, session: Session) -> dict:
+        """Display Subsystem Description screen."""
+        name = session.field_values.get('selected_sbsd', '')
+        sbsd = get_subsystem_description(name)
+
+        if not sbsd:
+            session.message = f"Subsystem {name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrksbsd')
+
+        job_queues = get_subsystem_job_queues(name)
+
+        lines = [
+            self._center_text(f"Display Subsystem Description - {name}", session.display_cols),
+            "",
+            f"Subsystem  . . . . :  {sbsd['name']}",
+            f"Description  . . . :  {sbsd['description']}",
+            f"Status . . . . . . :  {sbsd['status']}",
+            "",
+            "Celery settings:",
+            f"  Queue  . . . . . :  {sbsd.get('celery_queue', '*DEFAULT')}",
+            f"  Concurrency  . . :  {sbsd.get('worker_concurrency', 4)}",
+            "",
+            "Job Queues:",
+        ]
+
+        for jq in job_queues:
+            lines.append(f"  {jq['job_queue']:<10}  Priority: {jq['sequence']}")
+
+        lines.append("")
+        lines.append("F3=Exit  F12=Cancel")
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "dspsbsd",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": None,
+        }
+
+    def _screen_strsbs(self, session: Session) -> dict:
+        """Start Subsystem screen."""
+        lines = [
+            self._center_text("Start Subsystem (STRSBS)", session.display_cols),
+            "",
+            "Type choices, press Enter.",
+            "",
+            "Subsystem description  :  __________",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "strsbs",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "name"}],
+            "activeField": 0,
+        }
+
+    def _submit_strsbs(self, session: Session, fields: dict) -> dict:
+        """Handle Start Subsystem submission."""
+        name = fields.get('name', '').strip().upper()
+
+        if not name:
+            session.message = "Subsystem name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'strsbs')
+
+        success, msg = start_subsystem(name)
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        return self.get_screen(session, 'wrksbsd')
+
+    def _screen_endsbs(self, session: Session) -> dict:
+        """End Subsystem screen."""
+        lines = [
+            self._center_text("End Subsystem (ENDSBS)", session.display_cols),
+            "",
+            "Type choices, press Enter.",
+            "",
+            "Subsystem description  :  __________",
+            "How to end . . . . . . :  *CNTRLD___  *CNTRLD, *IMMED",
+            "",
+            "F3=Exit  F12=Cancel",
+        ]
+
+        content = self._build_content(lines, session)
+
+        return {
+            "screen": "endsbs",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "name"},
+                {"id": "option"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_endsbs(self, session: Session, fields: dict) -> dict:
+        """Handle End Subsystem submission."""
+        name = fields.get('name', '').strip().upper()
+        option = fields.get('option', '*CNTRLD').strip().upper() or '*CNTRLD'
+
+        if not name:
+            session.message = "Subsystem name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'endsbs')
+
+        success, msg = end_subsystem(name, option)
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        return self.get_screen(session, 'wrksbsd')
