@@ -645,6 +645,7 @@ def _migrate_objects_to_libraries():
 # =============================================================================
 
 def create_library(name: str, text: str = '', lib_type: str = '*PROD',
+                   asp_number: int = 1, create_authority: str = '*SYSVAL',
                    created_by: str = 'QSECOFR') -> tuple[bool, str]:
     """
     Create a library (AS/400 CRTLIB).
@@ -663,9 +664,9 @@ def create_library(name: str, text: str = '', lib_type: str = '*PROD',
 
             # Insert library record
             cursor.execute("""
-                INSERT INTO qsys.libraries (name, type, text, created_by)
-                VALUES (%s, %s, %s, %s)
-            """, (lib, lib_type, text, created_by))
+                INSERT INTO qsys.libraries (name, type, text, asp_number, create_authority, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (lib, lib_type, text, asp_number, create_authority, created_by))
 
         # Create the schema with object tables
         if not _ensure_library_schema(lib):
