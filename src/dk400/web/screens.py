@@ -152,6 +152,7 @@ class Session:
     message: str = ""
     message_level: str = "info"
     page_offsets: dict = field(default_factory=dict)  # {screen_name: offset}
+    context: dict = field(default_factory=dict)  # Contextual data for screens (e.g., selected journal)
 
     def get_offset(self, screen: str) -> int:
         """Get current page offset for a screen."""
