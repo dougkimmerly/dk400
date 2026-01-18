@@ -100,6 +100,20 @@ CREATE TABLE IF NOT EXISTS object_authorities (
 CREATE INDEX IF NOT EXISTS idx_objauth_object ON object_authorities(object_type, object_name);
 CREATE INDEX IF NOT EXISTS idx_objauth_user ON object_authorities(username);
 
+-- =============================================================================
+-- Libraries (AS/400 LIB - Container for all object types)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS libraries (
+    name VARCHAR(10) PRIMARY KEY,
+    type VARCHAR(10) DEFAULT '*PROD',       -- *PROD, *TEST
+    text VARCHAR(50) DEFAULT '',
+    asp_number INTEGER DEFAULT 1,           -- Auxiliary storage pool
+    create_authority VARCHAR(10) DEFAULT '*SYSVAL',
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_by VARCHAR(10) DEFAULT 'QSECOFR'
+);
+
 -- System values table (AS/400-style WRKSYSVAL)
 CREATE TABLE IF NOT EXISTS system_values (
     name VARCHAR(20) PRIMARY KEY,
@@ -238,7 +252,7 @@ CREATE TABLE IF NOT EXISTS output_queues (
     PRIMARY KEY (name, library)
 );
 
--- Spooled files (job output)
+-- Spooled files (job output) - centralized table referencing library-based output queues
 CREATE TABLE IF NOT EXISTS spooled_files (
     id SERIAL PRIMARY KEY,
     name VARCHAR(10) NOT NULL,
@@ -246,6 +260,7 @@ CREATE TABLE IF NOT EXISTS spooled_files (
     job_name VARCHAR(28) NOT NULL,             -- job/user/number format
     job_id VARCHAR(36),                        -- Celery task ID
     output_queue VARCHAR(10) DEFAULT 'QPRINT',
+    output_queue_lib VARCHAR(10) DEFAULT 'QGPL',  -- Library containing output queue
     status VARCHAR(10) DEFAULT '*RDY',         -- *RDY, *HLD, *PND, *PRT, *SAV
     user_data VARCHAR(10) DEFAULT '',
     form_type VARCHAR(10) DEFAULT '*STD',
@@ -258,14 +273,20 @@ CREATE TABLE IF NOT EXISTS spooled_files (
 );
 
 CREATE INDEX IF NOT EXISTS idx_splf_job ON spooled_files(job_name);
-CREATE INDEX IF NOT EXISTS idx_splf_outq ON spooled_files(output_queue, status);
+CREATE INDEX IF NOT EXISTS idx_splf_outq ON spooled_files(output_queue, output_queue_lib, status);
 CREATE INDEX IF NOT EXISTS idx_splf_user ON spooled_files(created_by);
 
--- Default output queues
-INSERT INTO output_queues (name, library, description, created_by) VALUES
-    ('QPRINT', '*LIBL', 'Default print output queue', 'SYSTEM'),
-    ('QPRINT2', '*LIBL', 'Secondary print output queue', 'SYSTEM')
-ON CONFLICT (name, library) DO NOTHING;
+-- Add output_queue_lib column if missing (for existing databases)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'spooled_files' AND column_name = 'output_queue_lib') THEN
+        ALTER TABLE spooled_files ADD COLUMN output_queue_lib VARCHAR(10) DEFAULT 'QGPL';
+    END IF;
+END $$;
+
+-- Note: Default output queues (QPRINT, QPRINT2) are created in QGPL library schema
+-- by _ensure_library_schema() and init_database()
 
 -- =============================================================================
 -- Job Schedule Entries (AS/400 WRKJOBSCDE)
@@ -464,7 +485,153 @@ CREATE TABLE IF NOT EXISTS PARM_VALID_VALUES (
 
 -- Index for value lookups
 CREATE INDEX IF NOT EXISTS idx_parm_val_ord ON PARM_VALID_VALUES(COMMAND_NAME, PARM_NAME, ORDINAL_POSITION);
+
+-- =============================================================================
+-- Default Libraries
+-- =============================================================================
+INSERT INTO libraries (name, type, text, created_by) VALUES
+    ('QSYS', '*PROD', 'System Library', 'QSECOFR'),
+    ('QGPL', '*PROD', 'General Purpose Library', 'QSECOFR'),
+    ('QUSRSYS', '*PROD', 'User System Library', 'QSECOFR')
+ON CONFLICT (name) DO NOTHING;
 """
+
+# SQL template for creating object tables within a library schema
+LIBRARY_OBJECT_TABLES_SQL = '''
+-- Data Areas in library {lib}
+CREATE TABLE IF NOT EXISTS {lib}._dtaara (
+    name VARCHAR(10) NOT NULL PRIMARY KEY,
+    type VARCHAR(10) DEFAULT '*CHAR',
+    length INTEGER DEFAULT 2000,
+    decimal_positions INTEGER DEFAULT 0,
+    value TEXT DEFAULT '',
+    text VARCHAR(50) DEFAULT '',
+    locked_by VARCHAR(10),
+    locked_at TIMESTAMP,
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(10),
+    changed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Message Queues in library {lib}
+CREATE TABLE IF NOT EXISTS {lib}._msgq (
+    name VARCHAR(10) NOT NULL PRIMARY KEY,
+    text VARCHAR(50) DEFAULT '',
+    delivery VARCHAR(10) DEFAULT '*HOLD',
+    severity INTEGER DEFAULT 0,
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Messages in message queues
+CREATE TABLE IF NOT EXISTS {lib}._msg (
+    id SERIAL PRIMARY KEY,
+    msgq VARCHAR(10) NOT NULL REFERENCES {lib}._msgq(name) ON DELETE CASCADE,
+    msg_id VARCHAR(7),
+    msg_type VARCHAR(10) DEFAULT '*INFO',
+    severity INTEGER DEFAULT 0,
+    msg_text TEXT NOT NULL,
+    msg_data TEXT,
+    sender VARCHAR(10),
+    sent TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(10) DEFAULT '*NEW'
+);
+CREATE INDEX IF NOT EXISTS idx_{lib_safe}_msg_q ON {lib}._msg(msgq, status);
+
+-- Query Definitions in library {lib}
+CREATE TABLE IF NOT EXISTS {lib}._qrydfn (
+    name VARCHAR(10) NOT NULL PRIMARY KEY,
+    text VARCHAR(50) DEFAULT '',
+    source_schema VARCHAR(128),
+    source_table VARCHAR(128),
+    selected_columns JSONB DEFAULT '[]',
+    where_conditions JSONB DEFAULT '[]',
+    order_by_fields JSONB DEFAULT '[]',
+    summary_functions JSONB DEFAULT '[]',
+    group_by_fields JSONB DEFAULT '[]',
+    output_type VARCHAR(10) DEFAULT '*DISPLAY',
+    row_limit INTEGER DEFAULT 0,
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    changed_by VARCHAR(10),
+    changed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_run TIMESTAMP
+);
+
+-- Job Descriptions in library {lib}
+CREATE TABLE IF NOT EXISTS {lib}._jobd (
+    name VARCHAR(10) NOT NULL PRIMARY KEY,
+    text VARCHAR(50) DEFAULT '',
+    job_queue VARCHAR(21) DEFAULT 'QGPL/QBATCH',
+    job_priority INTEGER DEFAULT 5,
+    output_queue VARCHAR(21) DEFAULT '*USRPRF',
+    print_device VARCHAR(10) DEFAULT '*USRPRF',
+    routing_data VARCHAR(80) DEFAULT 'QCMDB',
+    request_data VARCHAR(256) DEFAULT '',
+    user_profile VARCHAR(10) DEFAULT '*RQD',
+    accounting_code VARCHAR(15) DEFAULT '',
+    log_level INTEGER DEFAULT 4,
+    log_severity INTEGER DEFAULT 20,
+    log_text VARCHAR(10) DEFAULT '*MSG',
+    hold_on_jobq VARCHAR(10) DEFAULT '*NO',
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Output Queues in library {lib}
+CREATE TABLE IF NOT EXISTS {lib}._outq (
+    name VARCHAR(10) NOT NULL PRIMARY KEY,
+    text VARCHAR(50) DEFAULT '',
+    status VARCHAR(10) DEFAULT '*RLS',
+    max_size INTEGER DEFAULT 0,
+    authority VARCHAR(10) DEFAULT '*USE',
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Authorization Lists in library {lib}
+CREATE TABLE IF NOT EXISTS {lib}._autl (
+    name VARCHAR(10) NOT NULL PRIMARY KEY,
+    text VARCHAR(50) DEFAULT '',
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Authorization List Entries
+CREATE TABLE IF NOT EXISTS {lib}._autle (
+    autl VARCHAR(10) NOT NULL REFERENCES {lib}._autl(name) ON DELETE CASCADE,
+    user_profile VARCHAR(10) NOT NULL,
+    authority VARCHAR(10) DEFAULT '*USE',
+    PRIMARY KEY (autl, user_profile)
+);
+
+-- Subsystem Descriptions in library {lib}
+CREATE TABLE IF NOT EXISTS {lib}._sbsd (
+    name VARCHAR(10) NOT NULL PRIMARY KEY,
+    text VARCHAR(50) DEFAULT '',
+    max_active_jobs INTEGER DEFAULT 0,
+    status VARCHAR(10) DEFAULT '*INACTIVE',
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Job Schedule Entries in library {lib}
+CREATE TABLE IF NOT EXISTS {lib}._jobscde (
+    name VARCHAR(20) NOT NULL PRIMARY KEY,
+    text VARCHAR(50) DEFAULT '',
+    command TEXT NOT NULL,
+    frequency VARCHAR(10) DEFAULT '*ONCE',
+    schedule_date DATE,
+    schedule_time TIME,
+    days_of_week VARCHAR(20) DEFAULT '',
+    status VARCHAR(10) DEFAULT '*ACTIVE',
+    last_run TIMESTAMP,
+    next_run TIMESTAMP,
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+'''
 
 
 def get_connection() -> psycopg2.extensions.connection:
@@ -495,12 +662,377 @@ def init_database() -> bool:
         with get_cursor(dict_cursor=False) as cursor:
             cursor.execute(SCHEMA_SQL)
         logger.info("Database schema initialized successfully")
+
+        # Create default library schemas (QSYS, QGPL, QUSRSYS)
+        for lib in ['QSYS', 'QGPL', 'QUSRSYS']:
+            _ensure_library_schema(lib)
+        logger.info("Default library schemas created")
+
+        # Migrate existing objects to library schemas
+        _migrate_objects_to_libraries()
+
+        # Create default system objects in QGPL
+        _create_default_system_objects()
+
         # Populate default commands after schema creation
         populate_default_commands()
         return True
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         return False
+
+
+def _create_default_system_objects():
+    """Create default system objects in library schemas."""
+    try:
+        with get_cursor(dict_cursor=False) as cursor:
+            # Create default output queues in QGPL
+            cursor.execute("""
+                INSERT INTO qgpl._outq (name, text, status, created_by)
+                VALUES ('QPRINT', 'Default print output queue', '*RLS', 'SYSTEM')
+                ON CONFLICT (name) DO NOTHING
+            """)
+            cursor.execute("""
+                INSERT INTO qgpl._outq (name, text, status, created_by)
+                VALUES ('QPRINT2', 'Secondary print output queue', '*RLS', 'SYSTEM')
+                ON CONFLICT (name) DO NOTHING
+            """)
+
+            # Create default message queues in QSYS
+            cursor.execute("""
+                INSERT INTO qsys._msgq (name, text, delivery, created_by)
+                VALUES ('QSYSOPR', 'System operator message queue', '*BREAK', 'SYSTEM')
+                ON CONFLICT (name) DO NOTHING
+            """)
+            cursor.execute("""
+                INSERT INTO qsys._msgq (name, text, delivery, created_by)
+                VALUES ('QSYSMSG', 'System message queue', '*HOLD', 'SYSTEM')
+                ON CONFLICT (name) DO NOTHING
+            """)
+
+            # Create default data areas in QSYS
+            cursor.execute("""
+                INSERT INTO qsys._dtaara (name, type, length, value, text, created_by)
+                VALUES ('QDATE', '*CHAR', 8, TO_CHAR(CURRENT_DATE, 'YYYYMMDD'), 'System date', 'SYSTEM')
+                ON CONFLICT (name) DO UPDATE SET value = TO_CHAR(CURRENT_DATE, 'YYYYMMDD')
+            """)
+            cursor.execute("""
+                INSERT INTO qsys._dtaara (name, type, length, value, text, created_by)
+                VALUES ('QTIME', '*CHAR', 6, TO_CHAR(CURRENT_TIME, 'HH24MISS'), 'System time', 'SYSTEM')
+                ON CONFLICT (name) DO UPDATE SET value = TO_CHAR(CURRENT_TIME, 'HH24MISS')
+            """)
+
+        logger.info("Default system objects created")
+    except Exception as e:
+        logger.warning(f"Creating default system objects: {e}")
+
+
+def _ensure_library_schema(library: str) -> bool:
+    """Ensure a library schema exists with all object tables."""
+    lib = library.upper()
+    lib_safe = lib.lower().replace('-', '_')  # Safe for identifiers
+
+    try:
+        with get_cursor(dict_cursor=False) as cursor:
+            # Create schema if not exists
+            cursor.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                sql.Identifier(lib_safe)
+            ))
+
+            # Create object tables in the schema
+            # Use string formatting for table creation (schema qualified)
+            lib_sql = LIBRARY_OBJECT_TABLES_SQL.format(lib=lib_safe, lib_safe=lib_safe)
+            cursor.execute(lib_sql)
+
+        logger.info(f"Library schema {lib} ensured")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to ensure library schema {lib}: {e}")
+        return False
+
+
+def _migrate_objects_to_libraries():
+    """Migrate existing objects from old tables to library schemas (one-time)."""
+    try:
+        with get_cursor(dict_cursor=False) as cursor:
+            # Check if migration is needed (old tables have data, new don't)
+            cursor.execute("SELECT COUNT(*) FROM data_areas WHERE library != '*LIBL'")
+            old_dtaara_count = cursor.fetchone()[0]
+
+            if old_dtaara_count > 0:
+                # Check if already migrated
+                cursor.execute("""
+                    SELECT COUNT(*) FROM information_schema.tables
+                    WHERE table_schema = 'qgpl' AND table_name = '_dtaara'
+                """)
+                if cursor.fetchone()[0] > 0:
+                    cursor.execute("SELECT COUNT(*) FROM qgpl._dtaara")
+                    if cursor.fetchone()[0] > 0:
+                        logger.info("Objects already migrated to library schemas")
+                        return
+
+            # Migrate data areas
+            cursor.execute("""
+                INSERT INTO qgpl._dtaara (name, type, length, decimal_positions, value, text, created_by, created)
+                SELECT name, type, length, decimal_positions, value, description, created_by, created_at
+                FROM data_areas
+                WHERE library IN ('*LIBL', 'QGPL')
+                ON CONFLICT (name) DO NOTHING
+            """)
+
+            # Migrate message queues
+            cursor.execute("""
+                INSERT INTO qgpl._msgq (name, text, delivery, severity, created_by, created)
+                SELECT name, description, delivery, 0, 'SYSTEM', CURRENT_TIMESTAMP
+                FROM message_queues
+                ON CONFLICT (name) DO NOTHING
+            """)
+
+            # Migrate query definitions
+            cursor.execute("""
+                INSERT INTO qgpl._qrydfn (name, text, source_schema, source_table, selected_columns,
+                    where_conditions, order_by_fields, summary_functions, group_by_fields,
+                    output_type, row_limit, created_by, created, changed_by, changed, last_run)
+                SELECT name, description, source_schema, source_table, selected_columns,
+                    where_conditions, order_by_fields,
+                    COALESCE(summary_functions, '[]'::jsonb),
+                    COALESCE(group_by_fields, '[]'::jsonb),
+                    output_type, row_limit, created_by, created_at, updated_by, updated_at, last_run_at
+                FROM query_definitions
+                WHERE library IN ('*LIBL', 'QGPL')
+                ON CONFLICT (name) DO NOTHING
+            """)
+
+            # Migrate job descriptions
+            cursor.execute("""
+                INSERT INTO qgpl._jobd (name, text, job_queue, job_priority, output_queue,
+                    print_device, routing_data, request_data, user_profile, accounting_code,
+                    log_level, log_severity, log_text, hold_on_jobq, created_by, created)
+                SELECT name, description, job_queue, job_priority, output_queue,
+                    print_device, routing_data, request_data, user_profile, accounting_code,
+                    log_level, log_severity, log_text, hold_on_jobq, created_by, created_at
+                FROM job_descriptions
+                WHERE library IN ('*LIBL', 'QGPL')
+                ON CONFLICT (name) DO NOTHING
+            """)
+
+            # Migrate output queues
+            cursor.execute("""
+                INSERT INTO qgpl._outq (name, text, status, max_size, authority, created_by, created)
+                SELECT name, description, status, max_size, authority, created_by, created_at
+                FROM output_queues
+                WHERE library IN ('*LIBL', 'QGPL')
+                ON CONFLICT (name) DO NOTHING
+            """)
+
+            logger.info("Migrated existing objects to library schemas")
+
+    except Exception as e:
+        logger.warning(f"Migration to library schemas: {e}")
+
+
+# =============================================================================
+# Library Management Functions (CRTLIB/DLTLIB/WRKLIB)
+# =============================================================================
+
+def create_library(name: str, text: str = '', lib_type: str = '*PROD',
+                   created_by: str = 'QSECOFR') -> tuple[bool, str]:
+    """
+    Create a library (AS/400 CRTLIB).
+    Creates the library entry and PostgreSQL schema with object tables.
+    """
+    lib = name.upper()
+    if len(lib) > 10:
+        return False, "Library name must be 10 characters or less"
+
+    try:
+        with get_cursor() as cursor:
+            # Check if library already exists
+            cursor.execute("SELECT name FROM libraries WHERE name = %s", (lib,))
+            if cursor.fetchone():
+                return False, f"Library {lib} already exists"
+
+            # Insert library record
+            cursor.execute("""
+                INSERT INTO libraries (name, type, text, created_by)
+                VALUES (%s, %s, %s, %s)
+            """, (lib, lib_type, text, created_by))
+
+        # Create the schema with object tables
+        if not _ensure_library_schema(lib):
+            return False, f"Failed to create schema for library {lib}"
+
+        return True, f"Library {lib} created"
+
+    except Exception as e:
+        logger.error(f"Failed to create library {lib}: {e}")
+        return False, str(e)
+
+
+def delete_library(name: str) -> tuple[bool, str]:
+    """
+    Delete a library (AS/400 DLTLIB).
+    Drops the schema and all objects within it.
+    """
+    lib = name.upper()
+
+    # Protect system libraries
+    if lib in ('QSYS', 'QGPL', 'QUSRSYS', 'QTEMP'):
+        return False, f"Cannot delete system library {lib}"
+
+    try:
+        lib_safe = lib.lower().replace('-', '_')
+
+        with get_cursor(dict_cursor=False) as cursor:
+            # Check if library exists
+            cursor.execute("SELECT name FROM libraries WHERE name = %s", (lib,))
+            if not cursor.fetchone():
+                return False, f"Library {lib} not found"
+
+            # Drop the schema (CASCADE drops all objects)
+            cursor.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
+                sql.Identifier(lib_safe)
+            ))
+
+            # Delete library record
+            cursor.execute("DELETE FROM libraries WHERE name = %s", (lib,))
+
+        return True, f"Library {lib} deleted"
+
+    except Exception as e:
+        logger.error(f"Failed to delete library {lib}: {e}")
+        return False, str(e)
+
+
+def list_libraries() -> list[dict]:
+    """List all libraries (AS/400 WRKLIB)."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT name, type, text, asp_number, created, created_by
+                FROM libraries
+                ORDER BY name
+            """)
+            return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Failed to list libraries: {e}")
+        return []
+
+
+def get_library(name: str) -> Optional[dict]:
+    """Get library details."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT name, type, text, asp_number, created, created_by
+                FROM libraries
+                WHERE name = %s
+            """, (name.upper(),))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Failed to get library {name}: {e}")
+        return None
+
+
+def library_exists(name: str) -> bool:
+    """Check if a library exists."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("SELECT 1 FROM libraries WHERE name = %s", (name.upper(),))
+            return cursor.fetchone() is not None
+    except Exception:
+        return False
+
+
+def get_library_objects(library: str, obj_type: str = '*ALL') -> list[dict]:
+    """
+    List objects in a library (AS/400 WRKOBJ).
+    obj_type: *ALL, *DTAARA, *MSGQ, *QRYDFN, *JOBD, *OUTQ, *FILE, etc.
+    """
+    lib = library.upper()
+    lib_safe = lib.lower().replace('-', '_')
+
+    objects = []
+
+    try:
+        with get_cursor() as cursor:
+            # Data Areas
+            if obj_type in ('*ALL', '*DTAARA'):
+                try:
+                    cursor.execute(sql.SQL("""
+                        SELECT name, 'DTAARA' as type, text, created, created_by
+                        FROM {}._dtaara ORDER BY name
+                    """).format(sql.Identifier(lib_safe)))
+                    objects.extend([{**dict(r), 'library': lib} for r in cursor.fetchall()])
+                except:
+                    pass
+
+            # Message Queues
+            if obj_type in ('*ALL', '*MSGQ'):
+                try:
+                    cursor.execute(sql.SQL("""
+                        SELECT name, 'MSGQ' as type, text, created, created_by
+                        FROM {}._msgq ORDER BY name
+                    """).format(sql.Identifier(lib_safe)))
+                    objects.extend([{**dict(r), 'library': lib} for r in cursor.fetchall()])
+                except:
+                    pass
+
+            # Query Definitions
+            if obj_type in ('*ALL', '*QRYDFN'):
+                try:
+                    cursor.execute(sql.SQL("""
+                        SELECT name, 'QRYDFN' as type, text, created, created_by
+                        FROM {}._qrydfn ORDER BY name
+                    """).format(sql.Identifier(lib_safe)))
+                    objects.extend([{**dict(r), 'library': lib} for r in cursor.fetchall()])
+                except:
+                    pass
+
+            # Job Descriptions
+            if obj_type in ('*ALL', '*JOBD'):
+                try:
+                    cursor.execute(sql.SQL("""
+                        SELECT name, 'JOBD' as type, text, created, created_by
+                        FROM {}._jobd ORDER BY name
+                    """).format(sql.Identifier(lib_safe)))
+                    objects.extend([{**dict(r), 'library': lib} for r in cursor.fetchall()])
+                except:
+                    pass
+
+            # Output Queues
+            if obj_type in ('*ALL', '*OUTQ'):
+                try:
+                    cursor.execute(sql.SQL("""
+                        SELECT name, 'OUTQ' as type, text, created, created_by
+                        FROM {}._outq ORDER BY name
+                    """).format(sql.Identifier(lib_safe)))
+                    objects.extend([{**dict(r), 'library': lib} for r in cursor.fetchall()])
+                except:
+                    pass
+
+            # Physical Files (Tables) - actual PostgreSQL tables in the schema
+            if obj_type in ('*ALL', '*FILE', '*PF'):
+                try:
+                    cursor.execute("""
+                        SELECT table_name as name, 'FILE' as type, '' as text,
+                               NULL as created, NULL as created_by
+                        FROM information_schema.tables
+                        WHERE table_schema = %s
+                          AND table_type = 'BASE TABLE'
+                          AND table_name NOT LIKE '\\_%'
+                        ORDER BY table_name
+                    """, (lib_safe,))
+                    objects.extend([{**dict(r), 'library': lib} for r in cursor.fetchall()])
+                except:
+                    pass
+
+        return objects
+
+    except Exception as e:
+        logger.error(f"Failed to get objects in library {lib}: {e}")
+        return []
 
 
 def check_connection() -> bool:
@@ -1747,136 +2279,231 @@ def get_system_timezone_name() -> str:
 # Message Queues (AS/400-style MSGQ)
 # =============================================================================
 
-def create_message_queue(name: str, description: str = '', queue_type: str = '*STD',
-                         created_by: str = 'SYSTEM') -> tuple[bool, str]:
-    """Create a message queue."""
+def create_message_queue(name: str, library: str = 'QGPL', description: str = '',
+                         delivery: str = '*HOLD', created_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Create a message queue (CRTMSGQ)."""
     name = name.upper().strip()[:10]
+    library = library.upper().strip()[:10] if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if not name:
         return False, "Queue name is required"
 
+    # Ensure library exists
+    if not library_exists(library):
+        return False, f"Library {library} does not exist"
+    _ensure_library_schema(library)
+
     try:
         with get_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO message_queues (name, description, queue_type, created_by)
+            query = sql.SQL("""
+                INSERT INTO {}._msgq (name, text, delivery, created_by)
                 VALUES (%s, %s, %s, %s)
-            """, (name, description, queue_type, created_by))
-        return True, f"Message queue {name} created"
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name, description, delivery, created_by))
+        return True, f"Message queue {library}/{name} created"
     except psycopg2.IntegrityError:
-        return False, f"Message queue {name} already exists"
+        return False, f"Message queue {library}/{name} already exists"
     except Exception as e:
         logger.error(f"Failed to create message queue: {e}")
         return False, f"Failed to create message queue: {e}"
 
 
-def delete_message_queue(name: str) -> tuple[bool, str]:
-    """Delete a message queue."""
+def delete_message_queue(name: str, library: str = 'QGPL') -> tuple[bool, str]:
+    """Delete a message queue (DLTMSGQ)."""
     name = name.upper().strip()
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if name in ('QSYSOPR', 'QSYSMSG'):
         return False, f"Cannot delete system queue {name}"
 
     try:
         with get_cursor() as cursor:
-            cursor.execute("DELETE FROM message_queues WHERE name = %s", (name,))
+            query = sql.SQL("DELETE FROM {}._msgq WHERE name = %s").format(
+                sql.Identifier(lib_schema)
+            )
+            cursor.execute(query, (name,))
             if cursor.rowcount == 0:
-                return False, f"Message queue {name} not found"
-        return True, f"Message queue {name} deleted"
+                return False, f"Message queue {library}/{name} not found"
+        return True, f"Message queue {library}/{name} deleted"
     except Exception as e:
         logger.error(f"Failed to delete message queue: {e}")
         return False, f"Failed to delete message queue: {e}"
 
 
-def list_message_queues() -> list[dict]:
-    """List all message queues."""
+def list_message_queues(library: str = None) -> list[dict]:
+    """List message queues (WRKMSGQ).
+
+    If library is specified, queries only that library's _msgq table.
+    If library is None, queries all libraries' _msgq tables.
+    """
     queues = []
+
+    # Get list of libraries to query
+    if library:
+        libraries = [library.upper()]
+    else:
+        libraries = [lib['name'] for lib in list_libraries()]
+
     try:
         with get_cursor() as cursor:
-            cursor.execute("""
-                SELECT mq.*,
-                    (SELECT COUNT(*) FROM messages m WHERE m.queue_name = mq.name AND m.status = '*NEW') as new_count,
-                    (SELECT COUNT(*) FROM messages m WHERE m.queue_name = mq.name) as total_count
-                FROM message_queues mq
-                ORDER BY mq.name
-            """)
-            for row in cursor.fetchall():
-                queues.append(dict(row))
+            for lib in libraries:
+                lib_schema = lib.lower().replace('-', '_')
+
+                # Check if library schema and table exist
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_schema = %s AND table_name = '_msgq'
+                    )
+                """, (lib_schema,))
+                if not cursor.fetchone()[0]:
+                    continue
+
+                query = sql.SQL("SELECT * FROM {}._msgq ORDER BY name").format(
+                    sql.Identifier(lib_schema)
+                )
+                cursor.execute(query)
+
+                for row in cursor.fetchall():
+                    # Get message counts from _msg table
+                    count_query = sql.SQL("""
+                        SELECT
+                            COUNT(*) FILTER (WHERE status = '*NEW') as new_count,
+                            COUNT(*) as total_count
+                        FROM {}._msg WHERE msgq = %s
+                    """).format(sql.Identifier(lib_schema))
+                    cursor.execute(count_query, (row['name'],))
+                    counts = cursor.fetchone()
+
+                    queues.append({
+                        'name': row['name'],
+                        'library': lib,  # Add library from loop
+                        'description': row['text'],  # Column is 'text'
+                        'delivery': row.get('delivery', '*HOLD'),
+                        'created_by': row['created_by'],
+                        'created_at': row['created'],  # Column is 'created'
+                        'new_count': counts['new_count'] if counts else 0,
+                        'total_count': counts['total_count'] if counts else 0,
+                    })
+
+        # Sort by library, then name if we queried multiple libraries
+        if not library:
+            queues.sort(key=lambda q: (q['library'], q['name']))
+
     except Exception as e:
         logger.error(f"Failed to list message queues: {e}")
     return queues
 
 
-def send_message(queue_name: str, msg_text: str, msg_type: str = '*INFO',
-                 msg_id: str = '', severity: int = 0, sent_by: str = 'SYSTEM',
-                 msg_data: str = None) -> tuple[bool, str]:
+def send_message(queue_name: str, library: str = 'QGPL', msg_text: str = '',
+                 msg_type: str = '*INFO', msg_id: str = '', severity: int = 0,
+                 sent_by: str = 'SYSTEM', msg_data: str = None) -> tuple[bool, str]:
     """Send a message to a queue (SNDMSG)."""
     queue_name = queue_name.upper().strip()
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     try:
         with get_cursor() as cursor:
             # Verify queue exists
-            cursor.execute("SELECT 1 FROM message_queues WHERE name = %s", (queue_name,))
+            verify_query = sql.SQL("SELECT 1 FROM {}._msgq WHERE name = %s").format(
+                sql.Identifier(lib_schema)
+            )
+            cursor.execute(verify_query, (queue_name,))
             if not cursor.fetchone():
-                return False, f"Message queue {queue_name} not found"
+                return False, f"Message queue {library}/{queue_name} not found"
 
-            cursor.execute("""
-                INSERT INTO messages (queue_name, msg_id, msg_type, msg_text, msg_data, severity, sent_by)
+            query = sql.SQL("""
+                INSERT INTO {}._msg (msgq, msg_id, msg_type, msg_text, msg_data, severity, sender)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (queue_name, msg_id, msg_type, msg_text, msg_data, severity, sent_by))
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (queue_name, msg_id, msg_type, msg_text, msg_data, severity, sent_by))
         return True, "Message sent"
     except Exception as e:
         logger.error(f"Failed to send message: {e}")
         return False, f"Failed to send message: {e}"
 
 
-def get_messages(queue_name: str, status: str = None, limit: int = 50) -> list[dict]:
+def get_messages(queue_name: str, library: str = 'QGPL', status: str = None, limit: int = 50) -> list[dict]:
     """Get messages from a queue (DSPMSG)."""
     queue_name = queue_name.upper().strip()
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
     messages = []
 
     try:
         with get_cursor() as cursor:
             if status:
-                cursor.execute("""
-                    SELECT * FROM messages
-                    WHERE queue_name = %s AND status = %s
-                    ORDER BY sent_at DESC LIMIT %s
-                """, (queue_name, status, limit))
+                query = sql.SQL("""
+                    SELECT * FROM {}._msg
+                    WHERE msgq = %s AND status = %s
+                    ORDER BY sent DESC LIMIT %s
+                """).format(sql.Identifier(lib_schema))
+                cursor.execute(query, (queue_name, status, limit))
             else:
-                cursor.execute("""
-                    SELECT * FROM messages
-                    WHERE queue_name = %s
-                    ORDER BY sent_at DESC LIMIT %s
-                """, (queue_name, limit))
+                query = sql.SQL("""
+                    SELECT * FROM {}._msg
+                    WHERE msgq = %s
+                    ORDER BY sent DESC LIMIT %s
+                """).format(sql.Identifier(lib_schema))
+                cursor.execute(query, (queue_name, limit))
+
             for row in cursor.fetchall():
-                messages.append(dict(row))
+                messages.append({
+                    'id': row['id'],
+                    'queue_name': row['msgq'],
+                    'library': library,
+                    'msg_id': row['msg_id'],
+                    'msg_type': row['msg_type'],
+                    'msg_text': row['msg_text'],
+                    'msg_data': row['msg_data'],
+                    'severity': row['severity'],
+                    'sent_by': row['sender'],
+                    'sent_at': row['sent'],
+                    'status': row['status'],
+                })
     except Exception as e:
         logger.error(f"Failed to get messages: {e}")
     return messages
 
 
-def mark_message_old(message_id: int) -> tuple[bool, str]:
+def mark_message_old(message_id: int, library: str = 'QGPL') -> tuple[bool, str]:
     """Mark a message as old/read."""
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
+
     try:
         with get_cursor() as cursor:
-            cursor.execute(
-                "UPDATE messages SET status = '*OLD' WHERE id = %s AND status = '*NEW'",
-                (message_id,)
-            )
+            query = sql.SQL(
+                "UPDATE {}._msg SET status = '*OLD' WHERE id = %s AND status = '*NEW'"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (message_id,))
         return True, "Message marked as read"
     except Exception as e:
         return False, f"Failed to update message: {e}"
 
 
-def reply_to_message(message_id: int, reply: str, replied_by: str = 'SYSTEM') -> tuple[bool, str]:
-    """Reply to an inquiry message."""
+def reply_to_message(message_id: int, library: str = 'QGPL', reply: str = '',
+                     replied_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Reply to an inquiry message.
+
+    Note: Reply functionality requires additional columns in _msg table.
+    For now, this just marks the message as answered.
+    """
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
+
     try:
         with get_cursor() as cursor:
-            cursor.execute("""
-                UPDATE messages
-                SET reply = %s, replied_at = CURRENT_TIMESTAMP, status = '*ANSWERED'
+            # Just mark as answered (reply column not in _msg table yet)
+            query = sql.SQL("""
+                UPDATE {}._msg
+                SET status = '*ANSWERED'
                 WHERE id = %s AND msg_type = '*INQ'
-            """, (reply, message_id))
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (message_id,))
             if cursor.rowcount == 0:
                 return False, "Message not found or not an inquiry"
         return True, "Reply sent"
@@ -1884,24 +2511,36 @@ def reply_to_message(message_id: int, reply: str, replied_by: str = 'SYSTEM') ->
         return False, f"Failed to reply: {e}"
 
 
-def delete_message(message_id: int) -> tuple[bool, str]:
+def delete_message(message_id: int, library: str = 'QGPL') -> tuple[bool, str]:
     """Delete a message."""
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
+
     try:
         with get_cursor() as cursor:
-            cursor.execute("DELETE FROM messages WHERE id = %s", (message_id,))
+            query = sql.SQL("DELETE FROM {}._msg WHERE id = %s").format(
+                sql.Identifier(lib_schema)
+            )
+            cursor.execute(query, (message_id,))
         return True, "Message deleted"
     except Exception as e:
         return False, f"Failed to delete message: {e}"
 
 
-def clear_message_queue(queue_name: str) -> tuple[bool, str]:
-    """Clear all messages from a queue."""
+def clear_message_queue(queue_name: str, library: str = 'QGPL') -> tuple[bool, str]:
+    """Clear all messages from a queue (CLRMSGQ)."""
     queue_name = queue_name.upper().strip()
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
+
     try:
         with get_cursor() as cursor:
-            cursor.execute("DELETE FROM messages WHERE queue_name = %s", (queue_name,))
+            query = sql.SQL("DELETE FROM {}._msg WHERE msgq = %s").format(
+                sql.Identifier(lib_schema)
+            )
+            cursor.execute(query, (queue_name,))
             count = cursor.rowcount
-        return True, f"Cleared {count} messages from {queue_name}"
+        return True, f"Cleared {count} messages from {library}/{queue_name}"
     except Exception as e:
         return False, f"Failed to clear queue: {e}"
 
@@ -1910,13 +2549,14 @@ def clear_message_queue(queue_name: str) -> tuple[bool, str]:
 # Data Areas (AS/400-style DTAARA)
 # =============================================================================
 
-def create_data_area(name: str, library: str = '*LIBL', type: str = '*CHAR',
+def create_data_area(name: str, library: str = 'QGPL', type: str = '*CHAR',
                      length: int = 2000, decimal_positions: int = 0,
                      value: str = '', description: str = '',
                      created_by: str = 'SYSTEM') -> tuple[bool, str]:
     """Create a data area (CRTDTAARA)."""
     name = name.upper().strip()[:10]
-    library = library.upper().strip()[:10] or '*LIBL'
+    library = library.upper().strip()[:10] if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if not name:
         return False, "Data area name is required"
@@ -1924,13 +2564,19 @@ def create_data_area(name: str, library: str = '*LIBL', type: str = '*CHAR',
     if type not in ('*CHAR', '*DEC', '*LGL'):
         return False, "Type must be *CHAR, *DEC, or *LGL"
 
+    # Ensure library exists
+    if not library_exists(library):
+        return False, f"Library {library} does not exist"
+    _ensure_library_schema(library)
+
     try:
         with get_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO data_areas (name, library, type, length, decimal_positions,
-                                        value, description, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (name, library, type, length, decimal_positions, value, description, created_by))
+            query = sql.SQL("""
+                INSERT INTO {}._dtaara (name, type, length, decimal_positions,
+                                        value, text, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name, type, length, decimal_positions, value, description, created_by))
         return True, f"Data area {library}/{name} created"
     except psycopg2.IntegrityError:
         return False, f"Data area {library}/{name} already exists"
@@ -1939,20 +2585,21 @@ def create_data_area(name: str, library: str = '*LIBL', type: str = '*CHAR',
         return False, f"Failed to create data area: {e}"
 
 
-def delete_data_area(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+def delete_data_area(name: str, library: str = 'QGPL') -> tuple[bool, str]:
     """Delete a data area (DLTDTAARA)."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if name in ('QDATE', 'QTIME'):
         return False, f"Cannot delete system data area {name}"
 
     try:
         with get_cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM data_areas WHERE name = %s AND library = %s",
-                (name, library)
-            )
+            query = sql.SQL(
+                "DELETE FROM {}._dtaara WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             if cursor.rowcount == 0:
                 return False, f"Data area {library}/{name} not found"
         return True, f"Data area {library}/{name} deleted"
@@ -1960,38 +2607,54 @@ def delete_data_area(name: str, library: str = '*LIBL') -> tuple[bool, str]:
         return False, f"Failed to delete data area: {e}"
 
 
-def get_data_area(name: str, library: str = '*LIBL') -> dict | None:
+def get_data_area(name: str, library: str = 'QGPL') -> dict | None:
     """Get a data area (RTVDTAARA)."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     try:
         with get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM data_areas WHERE name = %s AND library = %s",
-                (name, library)
-            )
+            query = sql.SQL(
+                "SELECT * FROM {}._dtaara WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             row = cursor.fetchone()
             if row:
-                return dict(row)
+                return {
+                    'name': row['name'],
+                    'library': library,  # From parameter
+                    'type': row['type'],
+                    'length': row['length'],
+                    'decimal_positions': row['decimal_positions'],
+                    'value': row['value'],
+                    'description': row['text'],  # Column is 'text'
+                    'locked_by': row['locked_by'],
+                    'locked_at': row['locked_at'],
+                    'created_by': row['created_by'],
+                    'created_at': row['created'],  # Column is 'created'
+                    'updated_by': row['changed_by'],  # Column is 'changed_by'
+                    'updated_at': row['changed'],  # Column is 'changed'
+                }
     except Exception as e:
-        logger.error(f"Failed to get data area: {e}")
+        logger.error(f"Failed to get data area {library}/{name}: {e}")
     return None
 
 
-def change_data_area(name: str, library: str = '*LIBL', value: str = None,
+def change_data_area(name: str, library: str = 'QGPL', value: str = None,
                      updated_by: str = 'SYSTEM') -> tuple[bool, str]:
     """Change a data area value (CHGDTAARA)."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     try:
         with get_cursor() as cursor:
             # Check if locked by another user
-            cursor.execute(
-                "SELECT locked_by FROM data_areas WHERE name = %s AND library = %s",
-                (name, library)
-            )
+            query = sql.SQL(
+                "SELECT locked_by FROM {}._dtaara WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             row = cursor.fetchone()
             if not row:
                 return False, f"Data area {library}/{name} not found"
@@ -1999,27 +2662,29 @@ def change_data_area(name: str, library: str = '*LIBL', value: str = None,
             if row['locked_by'] and row['locked_by'] != updated_by:
                 return False, f"Data area locked by {row['locked_by']}"
 
-            cursor.execute("""
-                UPDATE data_areas
-                SET value = %s, updated_by = %s, updated_at = CURRENT_TIMESTAMP
-                WHERE name = %s AND library = %s
-            """, (value, updated_by, name, library))
+            query = sql.SQL("""
+                UPDATE {}._dtaara
+                SET value = %s, changed_by = %s, changed = CURRENT_TIMESTAMP
+                WHERE name = %s
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (value, updated_by, name))
         return True, f"Data area {library}/{name} changed"
     except Exception as e:
         return False, f"Failed to change data area: {e}"
 
 
-def lock_data_area(name: str, library: str = '*LIBL', locked_by: str = 'SYSTEM') -> tuple[bool, str]:
+def lock_data_area(name: str, library: str = 'QGPL', locked_by: str = 'SYSTEM') -> tuple[bool, str]:
     """Lock a data area for exclusive use."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     try:
         with get_cursor() as cursor:
-            cursor.execute(
-                "SELECT locked_by FROM data_areas WHERE name = %s AND library = %s",
-                (name, library)
-            )
+            query = sql.SQL(
+                "SELECT locked_by FROM {}._dtaara WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             row = cursor.fetchone()
             if not row:
                 return False, f"Data area {library}/{name} not found"
@@ -2027,27 +2692,29 @@ def lock_data_area(name: str, library: str = '*LIBL', locked_by: str = 'SYSTEM')
             if row['locked_by'] and row['locked_by'] != locked_by:
                 return False, f"Data area already locked by {row['locked_by']}"
 
-            cursor.execute("""
-                UPDATE data_areas
+            query = sql.SQL("""
+                UPDATE {}._dtaara
                 SET locked_by = %s, locked_at = CURRENT_TIMESTAMP
-                WHERE name = %s AND library = %s
-            """, (locked_by, name, library))
+                WHERE name = %s
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (locked_by, name))
         return True, f"Data area {library}/{name} locked"
     except Exception as e:
         return False, f"Failed to lock data area: {e}"
 
 
-def unlock_data_area(name: str, library: str = '*LIBL', unlocked_by: str = 'SYSTEM') -> tuple[bool, str]:
+def unlock_data_area(name: str, library: str = 'QGPL', unlocked_by: str = 'SYSTEM') -> tuple[bool, str]:
     """Unlock a data area."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     try:
         with get_cursor() as cursor:
-            cursor.execute(
-                "SELECT locked_by FROM data_areas WHERE name = %s AND library = %s",
-                (name, library)
-            )
+            query = sql.SQL(
+                "SELECT locked_by FROM {}._dtaara WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             row = cursor.fetchone()
             if not row:
                 return False, f"Data area {library}/{name} not found"
@@ -2063,29 +2730,71 @@ def unlock_data_area(name: str, library: str = '*LIBL', unlocked_by: str = 'SYST
                 if not user_row or user_row['user_class'] != '*SECOFR':
                     return False, f"Data area locked by {row['locked_by']}"
 
-            cursor.execute("""
-                UPDATE data_areas SET locked_by = NULL, locked_at = NULL
-                WHERE name = %s AND library = %s
-            """, (name, library))
+            query = sql.SQL("""
+                UPDATE {}._dtaara SET locked_by = NULL, locked_at = NULL
+                WHERE name = %s
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
         return True, f"Data area {library}/{name} unlocked"
     except Exception as e:
         return False, f"Failed to unlock data area: {e}"
 
 
 def list_data_areas(library: str = None) -> list[dict]:
-    """List data areas (WRKDTAARA)."""
+    """List data areas (WRKDTAARA).
+
+    If library is specified, queries only that library's _dtaara table.
+    If library is None, queries all libraries' _dtaara tables.
+    """
     areas = []
+
+    # Get list of libraries to query
+    if library:
+        libraries = [library.upper()]
+    else:
+        libraries = [lib['name'] for lib in list_libraries()]
+
     try:
         with get_cursor() as cursor:
-            if library:
-                cursor.execute(
-                    "SELECT * FROM data_areas WHERE library = %s ORDER BY name",
-                    (library.upper(),)
+            for lib in libraries:
+                lib_schema = lib.lower().replace('-', '_')
+
+                # Check if library schema and table exist
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_schema = %s AND table_name = '_dtaara'
+                    )
+                """, (lib_schema,))
+                if not cursor.fetchone()[0]:
+                    continue
+
+                query = sql.SQL("SELECT * FROM {}._dtaara ORDER BY name").format(
+                    sql.Identifier(lib_schema)
                 )
-            else:
-                cursor.execute("SELECT * FROM data_areas ORDER BY library, name")
-            for row in cursor.fetchall():
-                areas.append(dict(row))
+                cursor.execute(query)
+
+                for row in cursor.fetchall():
+                    areas.append({
+                        'name': row['name'],
+                        'library': lib,  # Add library from loop
+                        'type': row['type'],
+                        'length': row['length'],
+                        'decimal_positions': row['decimal_positions'],
+                        'value': row['value'],
+                        'description': row['text'],  # Column is 'text'
+                        'locked_by': row['locked_by'],
+                        'locked_at': row['locked_at'],
+                        'created_by': row['created_by'],
+                        'created_at': row['created'],  # Column is 'created'
+                        'updated_by': row['changed_by'],  # Column is 'changed_by'
+                        'updated_at': row['changed'],  # Column is 'changed'
+                    })
+
+        # Sort by library, then name if we queried multiple libraries
+        if not library:
+            areas.sort(key=lambda a: (a['library'], a['name']))
+
     except Exception as e:
         logger.error(f"Failed to list data areas: {e}")
     return areas
@@ -2095,13 +2804,14 @@ def list_data_areas(library: str = None) -> list[dict]:
 # Job Descriptions (AS/400-style JOBD)
 # =============================================================================
 
-def create_job_description(name: str, library: str = '*LIBL', description: str = '',
-                           job_queue: str = 'QBATCH', job_priority: int = 5,
+def create_job_description(name: str, library: str = 'QGPL', description: str = '',
+                           job_queue: str = 'QGPL/QBATCH', job_priority: int = 5,
                            output_queue: str = '*USRPRF', user_profile: str = '*RQD',
                            hold_on_jobq: str = '*NO', created_by: str = 'SYSTEM') -> tuple[bool, str]:
     """Create a job description (CRTJOBD)."""
     name = name.upper().strip()[:10]
-    library = library.upper().strip()[:10] or '*LIBL'
+    library = library.upper().strip()[:10] if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if not name:
         return False, "Job description name is required"
@@ -2109,14 +2819,20 @@ def create_job_description(name: str, library: str = '*LIBL', description: str =
     if job_priority < 1 or job_priority > 9:
         return False, "Job priority must be 1-9"
 
+    # Ensure library exists
+    if not library_exists(library):
+        return False, f"Library {library} does not exist"
+    _ensure_library_schema(library)
+
     try:
         with get_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO job_descriptions (name, library, description, job_queue,
-                                              job_priority, output_queue, user_profile,
-                                              hold_on_jobq, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (name, library, description, job_queue, job_priority,
+            query = sql.SQL("""
+                INSERT INTO {}._jobd (name, text, job_queue,
+                                      job_priority, output_queue, user_profile,
+                                      hold_on_jobq, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name, description, job_queue, job_priority,
                   output_queue, user_profile, hold_on_jobq, created_by))
         return True, f"Job description {library}/{name} created"
     except psycopg2.IntegrityError:
@@ -2125,20 +2841,21 @@ def create_job_description(name: str, library: str = '*LIBL', description: str =
         return False, f"Failed to create job description: {e}"
 
 
-def delete_job_description(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+def delete_job_description(name: str, library: str = 'QGPL') -> tuple[bool, str]:
     """Delete a job description (DLTJOBD)."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if name in ('QBATCH', 'QINTER', 'QSPL'):
         return False, f"Cannot delete system job description {name}"
 
     try:
         with get_cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM job_descriptions WHERE name = %s AND library = %s",
-                (name, library)
-            )
+            query = sql.SQL(
+                "DELETE FROM {}._jobd WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             if cursor.rowcount == 0:
                 return False, f"Job description {library}/{name} not found"
         return True, f"Job description {library}/{name} deleted"
@@ -2146,65 +2863,133 @@ def delete_job_description(name: str, library: str = '*LIBL') -> tuple[bool, str
         return False, f"Failed to delete job description: {e}"
 
 
-def get_job_description(name: str, library: str = '*LIBL') -> dict | None:
+def get_job_description(name: str, library: str = 'QGPL') -> dict | None:
     """Get a job description."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     try:
         with get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM job_descriptions WHERE name = %s AND library = %s",
-                (name, library)
-            )
+            query = sql.SQL(
+                "SELECT * FROM {}._jobd WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             row = cursor.fetchone()
             if row:
-                return dict(row)
+                return {
+                    'name': row['name'],
+                    'library': library,  # From parameter
+                    'description': row['text'],  # Column is 'text'
+                    'job_queue': row['job_queue'],
+                    'job_priority': row['job_priority'],
+                    'output_queue': row['output_queue'],
+                    'user_profile': row['user_profile'],
+                    'hold_on_jobq': row['hold_on_jobq'],
+                    'log_level': row.get('log_level', 4),
+                    'log_severity': row.get('log_severity', 20),
+                    'created_by': row['created_by'],
+                    'created_at': row['created'],  # Column is 'created'
+                }
     except Exception as e:
-        logger.error(f"Failed to get job description: {e}")
+        logger.error(f"Failed to get job description {library}/{name}: {e}")
     return None
 
 
 def list_job_descriptions(library: str = None) -> list[dict]:
-    """List job descriptions (WRKJOBD)."""
+    """List job descriptions (WRKJOBD).
+
+    If library is specified, queries only that library's _jobd table.
+    If library is None, queries all libraries' _jobd tables.
+    """
     jobds = []
+
+    # Get list of libraries to query
+    if library:
+        libraries = [library.upper()]
+    else:
+        libraries = [lib['name'] for lib in list_libraries()]
+
     try:
         with get_cursor() as cursor:
-            if library:
-                cursor.execute(
-                    "SELECT * FROM job_descriptions WHERE library = %s ORDER BY name",
-                    (library.upper(),)
+            for lib in libraries:
+                lib_schema = lib.lower().replace('-', '_')
+
+                # Check if library schema and table exist
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_schema = %s AND table_name = '_jobd'
+                    )
+                """, (lib_schema,))
+                if not cursor.fetchone()[0]:
+                    continue
+
+                query = sql.SQL("SELECT * FROM {}._jobd ORDER BY name").format(
+                    sql.Identifier(lib_schema)
                 )
-            else:
-                cursor.execute("SELECT * FROM job_descriptions ORDER BY library, name")
-            for row in cursor.fetchall():
-                jobds.append(dict(row))
+                cursor.execute(query)
+
+                for row in cursor.fetchall():
+                    jobds.append({
+                        'name': row['name'],
+                        'library': lib,  # Add library from loop
+                        'description': row['text'],  # Column is 'text'
+                        'job_queue': row['job_queue'],
+                        'job_priority': row['job_priority'],
+                        'output_queue': row['output_queue'],
+                        'user_profile': row['user_profile'],
+                        'hold_on_jobq': row['hold_on_jobq'],
+                        'created_by': row['created_by'],
+                        'created_at': row['created'],  # Column is 'created'
+                    })
+
+        # Sort by library, then name if we queried multiple libraries
+        if not library:
+            jobds.sort(key=lambda j: (j['library'], j['name']))
+
     except Exception as e:
         logger.error(f"Failed to list job descriptions: {e}")
     return jobds
 
 
-def change_job_description(name: str, library: str = '*LIBL', **kwargs) -> tuple[bool, str]:
+def change_job_description(name: str, library: str = 'QGPL', **kwargs) -> tuple[bool, str]:
     """Change a job description (CHGJOBD)."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
-    allowed_fields = ['description', 'job_queue', 'job_priority', 'output_queue',
-                      'user_profile', 'hold_on_jobq', 'log_level', 'log_severity']
+    # Map API field names to DB column names
+    field_mapping = {
+        'description': 'text',  # API uses 'description', DB uses 'text'
+        'job_queue': 'job_queue',
+        'job_priority': 'job_priority',
+        'output_queue': 'output_queue',
+        'user_profile': 'user_profile',
+        'hold_on_jobq': 'hold_on_jobq',
+        'log_level': 'log_level',
+        'log_severity': 'log_severity'
+    }
 
-    updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
+    updates = []
+    values = []
+    for api_field, db_field in field_mapping.items():
+        if api_field in kwargs and kwargs[api_field] is not None:
+            updates.append(f"{db_field} = %s")
+            values.append(kwargs[api_field])
 
     if not updates:
         return False, "No changes specified"
 
+    values.append(name)
+
     try:
         with get_cursor() as cursor:
-            set_clause = ', '.join(f"{k} = %s" for k in updates.keys())
-            values = list(updates.values()) + [name, library]
-            cursor.execute(f"""
-                UPDATE job_descriptions SET {set_clause}
-                WHERE name = %s AND library = %s
-            """, values)
+            query = sql.SQL("UPDATE {}._jobd SET {} WHERE name = %s").format(
+                sql.Identifier(lib_schema),
+                sql.SQL(', ').join([sql.SQL(u) for u in updates])
+            )
+            cursor.execute(query, values)
             if cursor.rowcount == 0:
                 return False, f"Job description {library}/{name} not found"
         return True, f"Job description {library}/{name} changed"
@@ -2216,21 +3001,28 @@ def change_job_description(name: str, library: str = '*LIBL', **kwargs) -> tuple
 # Output Queues and Spooled Files (AS/400-style OUTQ/SPLF)
 # =============================================================================
 
-def create_output_queue(name: str, library: str = '*LIBL', description: str = '',
+def create_output_queue(name: str, library: str = 'QGPL', description: str = '',
                         created_by: str = 'SYSTEM') -> tuple[bool, str]:
     """Create an output queue (CRTOUTQ)."""
     name = name.upper().strip()[:10]
-    library = library.upper().strip()[:10] or '*LIBL'
+    library = library.upper().strip()[:10] if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if not name:
         return False, "Output queue name is required"
 
+    # Ensure library exists
+    if not library_exists(library):
+        return False, f"Library {library} does not exist"
+    _ensure_library_schema(library)
+
     try:
         with get_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO output_queues (name, library, description, created_by)
-                VALUES (%s, %s, %s, %s)
-            """, (name, library, description, created_by))
+            query = sql.SQL("""
+                INSERT INTO {}._outq (name, text, created_by)
+                VALUES (%s, %s, %s)
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name, description, created_by))
         return True, f"Output queue {library}/{name} created"
     except psycopg2.IntegrityError:
         return False, f"Output queue {library}/{name} already exists"
@@ -2238,28 +3030,30 @@ def create_output_queue(name: str, library: str = '*LIBL', description: str = ''
         return False, f"Failed to create output queue: {e}"
 
 
-def delete_output_queue(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+def delete_output_queue(name: str, library: str = 'QGPL') -> tuple[bool, str]:
     """Delete an output queue (DLTOUTQ)."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if name in ('QPRINT', 'QPRINT2'):
         return False, f"Cannot delete system output queue {name}"
 
     try:
         with get_cursor() as cursor:
-            # Check for spooled files
+            # Check for spooled files (spooled_files table stays centralized)
             cursor.execute(
-                "SELECT COUNT(*) as cnt FROM spooled_files WHERE output_queue = %s",
-                (name,)
-            )
-            if cursor.fetchone()['cnt'] > 0:
-                return False, f"Output queue {name} contains spooled files"
-
-            cursor.execute(
-                "DELETE FROM output_queues WHERE name = %s AND library = %s",
+                "SELECT COUNT(*) as cnt FROM spooled_files WHERE output_queue = %s AND output_queue_lib = %s",
                 (name, library)
             )
+            result = cursor.fetchone()
+            if result and result['cnt'] > 0:
+                return False, f"Output queue {library}/{name} contains spooled files"
+
+            query = sql.SQL(
+                "DELETE FROM {}._outq WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             if cursor.rowcount == 0:
                 return False, f"Output queue {library}/{name} not found"
         return True, f"Output queue {library}/{name} deleted"
@@ -2268,43 +3062,80 @@ def delete_output_queue(name: str, library: str = '*LIBL') -> tuple[bool, str]:
 
 
 def list_output_queues(library: str = None) -> list[dict]:
-    """List output queues (WRKOUTQ)."""
+    """List output queues (WRKOUTQ).
+
+    If library is specified, queries only that library's _outq table.
+    If library is None, queries all libraries' _outq tables.
+    """
     queues = []
+
+    # Get list of libraries to query
+    if library:
+        libraries = [library.upper()]
+    else:
+        libraries = [lib['name'] for lib in list_libraries()]
+
     try:
         with get_cursor() as cursor:
-            if library:
+            for lib in libraries:
+                lib_schema = lib.lower().replace('-', '_')
+
+                # Check if library schema and table exist
                 cursor.execute("""
-                    SELECT oq.*,
-                        (SELECT COUNT(*) FROM spooled_files sf WHERE sf.output_queue = oq.name) as file_count
-                    FROM output_queues oq
-                    WHERE oq.library = %s
-                    ORDER BY oq.name
-                """, (library.upper(),))
-            else:
-                cursor.execute("""
-                    SELECT oq.*,
-                        (SELECT COUNT(*) FROM spooled_files sf WHERE sf.output_queue = oq.name) as file_count
-                    FROM output_queues oq
-                    ORDER BY oq.library, oq.name
-                """)
-            for row in cursor.fetchall():
-                queues.append(dict(row))
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_schema = %s AND table_name = '_outq'
+                    )
+                """, (lib_schema,))
+                if not cursor.fetchone()[0]:
+                    continue
+
+                query = sql.SQL("SELECT * FROM {}._outq ORDER BY name").format(
+                    sql.Identifier(lib_schema)
+                )
+                cursor.execute(query)
+
+                for row in cursor.fetchall():
+                    # Get spooled file count (centralized table)
+                    cursor.execute(
+                        "SELECT COUNT(*) as cnt FROM spooled_files WHERE output_queue = %s AND output_queue_lib = %s",
+                        (row['name'], lib)
+                    )
+                    cnt_result = cursor.fetchone()
+                    file_count = cnt_result['cnt'] if cnt_result else 0
+
+                    queues.append({
+                        'name': row['name'],
+                        'library': lib,  # Add library from loop
+                        'description': row['text'],  # Column is 'text'
+                        'status': row.get('status', '*RLS'),
+                        'created_by': row['created_by'],
+                        'created_at': row['created'],  # Column is 'created'
+                        'file_count': file_count,
+                    })
+
+        # Sort by library, then name if we queried multiple libraries
+        if not library:
+            queues.sort(key=lambda q: (q['library'], q['name']))
+
     except Exception as e:
         logger.error(f"Failed to list output queues: {e}")
     return queues
 
 
-def hold_output_queue(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+def hold_output_queue(name: str, library: str = 'QGPL') -> tuple[bool, str]:
     """Hold an output queue (HLDOUTQ)."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     try:
         with get_cursor() as cursor:
-            cursor.execute("""
-                UPDATE output_queues SET status = '*HLD'
-                WHERE name = %s AND library = %s
-            """, (name, library))
+            query = sql.SQL("""
+                UPDATE {}._outq SET status = '*HLD'
+                WHERE name = %s
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             if cursor.rowcount == 0:
                 return False, f"Output queue {library}/{name} not found"
         return True, f"Output queue {library}/{name} held"
@@ -2312,17 +3143,19 @@ def hold_output_queue(name: str, library: str = '*LIBL') -> tuple[bool, str]:
         return False, f"Failed to hold output queue: {e}"
 
 
-def release_output_queue(name: str, library: str = '*LIBL') -> tuple[bool, str]:
+def release_output_queue(name: str, library: str = 'QGPL') -> tuple[bool, str]:
     """Release an output queue (RLSOUTQ)."""
     name = name.upper().strip()
-    library = library.upper().strip() or '*LIBL'
+    library = library.upper().strip() if library and library != '*LIBL' else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     try:
         with get_cursor() as cursor:
-            cursor.execute("""
-                UPDATE output_queues SET status = '*RLS'
-                WHERE name = %s AND library = %s
-            """, (name, library))
+            query = sql.SQL("""
+                UPDATE {}._outq SET status = '*RLS'
+                WHERE name = %s
+            """).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
             if cursor.rowcount == 0:
                 return False, f"Output queue {library}/{name} not found"
         return True, f"Output queue {library}/{name} released"
@@ -2331,10 +3164,11 @@ def release_output_queue(name: str, library: str = '*LIBL') -> tuple[bool, str]:
 
 
 def create_spooled_file(name: str, job_name: str, content: str, job_id: str = None,
-                        output_queue: str = 'QPRINT', user_data: str = '',
-                        created_by: str = 'SYSTEM') -> tuple[bool, str, int]:
+                        output_queue: str = 'QPRINT', output_queue_lib: str = 'QGPL',
+                        user_data: str = '', created_by: str = 'SYSTEM') -> tuple[bool, str, int]:
     """Create a spooled file (job output)."""
     name = name.upper().strip()[:10]
+    output_queue_lib = output_queue_lib.upper().strip() if output_queue_lib else 'QGPL'
 
     try:
         with get_cursor() as cursor:
@@ -2351,10 +3185,10 @@ def create_spooled_file(name: str, job_name: str, content: str, job_id: str = No
 
             cursor.execute("""
                 INSERT INTO spooled_files (name, file_number, job_name, job_id, output_queue,
-                                           user_data, pages, total_records, content, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                           output_queue_lib, user_data, pages, total_records, content, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
-            """, (name, file_number, job_name, job_id, output_queue, user_data,
+            """, (name, file_number, job_name, job_id, output_queue, output_queue_lib, user_data,
                   pages, total_records, content, created_by))
             splf_id = cursor.fetchone()['id']
         return True, f"Spooled file {name} created", splf_id
@@ -3440,21 +4274,30 @@ def create_query_definition(
 
     name = name.upper().strip()[:10]
     library = library.upper().strip()[:10] if library else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if not name:
         return False, "Query name is required"
 
+    # Ensure library schema exists
+    if not library_exists(library):
+        return False, f"Library {library} does not exist"
+    _ensure_library_schema(library)
+
     try:
         with get_cursor() as cursor:
-            cursor.execute("""
-                INSERT INTO query_definitions (
-                    name, library, description, source_schema, source_table,
+            # Use psycopg2.sql for safe schema/table reference
+            query = sql.SQL("""
+                INSERT INTO {}._qrydfn (
+                    name, text, source_schema, source_table,
                     selected_columns, where_conditions, order_by_fields,
                     summary_functions, group_by_fields,
                     output_type, row_limit, created_by
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                name, library, description,
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """).format(sql.Identifier(lib_schema))
+
+            cursor.execute(query, (
+                name, description,
                 source_schema.lower() if source_schema else None,
                 source_table.lower() if source_table else None,
                 json.dumps(selected_columns or []),
@@ -3477,19 +4320,21 @@ def get_query_definition(name: str, library: str = 'QGPL') -> dict | None:
     """Get a query definition by name."""
     name = name.upper().strip()
     library = library.upper().strip() if library else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     try:
         with get_cursor() as cursor:
-            cursor.execute(
-                "SELECT * FROM query_definitions WHERE name = %s AND library = %s",
-                (name, library)
-            )
+            query = sql.SQL(
+                "SELECT * FROM {}._qrydfn WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+
+            cursor.execute(query, (name,))
             row = cursor.fetchone()
             if row:
                 return {
                     'name': row['name'],
-                    'library': row['library'],
-                    'description': row['description'],
+                    'library': library,  # From parameter, not stored in table
+                    'description': row['text'],  # Column is 'text' in library schema
                     'source_schema': row['source_schema'],
                     'source_table': row['source_table'],
                     'selected_columns': row['selected_columns'] or [],
@@ -3500,13 +4345,13 @@ def get_query_definition(name: str, library: str = 'QGPL') -> dict | None:
                     'output_type': row['output_type'],
                     'row_limit': row['row_limit'],
                     'created_by': row['created_by'],
-                    'created_at': str(row['created_at']) if row['created_at'] else '',
-                    'updated_by': row['updated_by'],
-                    'updated_at': str(row['updated_at']) if row['updated_at'] else '',
-                    'last_run_at': str(row['last_run_at']) if row['last_run_at'] else '',
+                    'created_at': str(row['created']) if row['created'] else '',
+                    'updated_by': row['changed_by'],
+                    'updated_at': str(row['changed']) if row['changed'] else '',
+                    'last_run_at': str(row['last_run']) if row['last_run'] else '',
                 }
     except Exception as e:
-        logger.error(f"Failed to get query {name}: {e}")
+        logger.error(f"Failed to get query {library}/{name}: {e}")
 
     return None
 
@@ -3522,17 +4367,24 @@ def update_query_definition(
 
     name = name.upper().strip()
     library = library.upper().strip() if library else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if not get_query_definition(name, library):
         return False, f"Query {library}/{name} not found"
 
-    # Build dynamic update
-    allowed_fields = [
-        'description', 'source_schema', 'source_table',
-        'selected_columns', 'where_conditions', 'order_by_fields',
-        'summary_functions', 'group_by_fields',
-        'output_type', 'row_limit'
-    ]
+    # Build dynamic update - map API field names to DB column names
+    field_mapping = {
+        'description': 'text',  # API uses 'description', DB uses 'text'
+        'source_schema': 'source_schema',
+        'source_table': 'source_table',
+        'selected_columns': 'selected_columns',
+        'where_conditions': 'where_conditions',
+        'order_by_fields': 'order_by_fields',
+        'summary_functions': 'summary_functions',
+        'group_by_fields': 'group_by_fields',
+        'output_type': 'output_type',
+        'row_limit': 'row_limit'
+    }
 
     # Fields that need JSON serialization
     json_fields = ('selected_columns', 'where_conditions', 'order_by_fields',
@@ -3541,36 +4393,37 @@ def update_query_definition(
     updates = []
     values = []
 
-    for field in allowed_fields:
-        if field in kwargs:
-            val = kwargs[field]
-            if field in json_fields:
+    for api_field, db_field in field_mapping.items():
+        if api_field in kwargs:
+            val = kwargs[api_field]
+            if api_field in json_fields:
                 val = json.dumps(val or [])
-            elif field in ('source_schema', 'source_table') and val:
+            elif api_field in ('source_schema', 'source_table') and val:
                 val = val.lower()
-            updates.append(f"{field} = %s")
+            updates.append(f"{db_field} = %s")
             values.append(val)
 
     if not updates:
         return False, "No fields to update"
 
-    updates.append("updated_by = %s")
+    updates.append("changed_by = %s")
     values.append(updated_by)
-    updates.append("updated_at = CURRENT_TIMESTAMP")
+    updates.append("changed = CURRENT_TIMESTAMP")
 
-    values.extend([name, library])
+    values.append(name)
 
     try:
         with get_cursor() as cursor:
-            cursor.execute(f"""
-                UPDATE query_definitions
-                SET {', '.join(updates)}
-                WHERE name = %s AND library = %s
-            """, values)
+            # Build query with safe schema reference
+            query = sql.SQL("UPDATE {}._qrydfn SET {} WHERE name = %s").format(
+                sql.Identifier(lib_schema),
+                sql.SQL(', ').join([sql.SQL(u) for u in updates])
+            )
+            cursor.execute(query, values)
 
         return True, f"Query {library}/{name} updated"
     except Exception as e:
-        logger.error(f"Failed to update query {name}: {e}")
+        logger.error(f"Failed to update query {library}/{name}: {e}")
         return False, f"Failed to update query: {e}"
 
 
@@ -3578,54 +4431,83 @@ def delete_query_definition(name: str, library: str = 'QGPL') -> tuple[bool, str
     """Delete a query definition (DLTQRY equivalent)."""
     name = name.upper().strip()
     library = library.upper().strip() if library else 'QGPL'
+    lib_schema = library.lower().replace('-', '_')
 
     if not get_query_definition(name, library):
         return False, f"Query {library}/{name} not found"
 
     try:
         with get_cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM query_definitions WHERE name = %s AND library = %s",
-                (name, library)
-            )
+            query = sql.SQL(
+                "DELETE FROM {}._qrydfn WHERE name = %s"
+            ).format(sql.Identifier(lib_schema))
+            cursor.execute(query, (name,))
 
         return True, f"Query {library}/{name} deleted"
     except Exception as e:
-        logger.error(f"Failed to delete query {name}: {e}")
+        logger.error(f"Failed to delete query {library}/{name}: {e}")
         return False, f"Failed to delete query: {e}"
 
 
 def list_query_definitions(library: str = None, created_by: str = None) -> list[dict]:
-    """List query definitions with optional filters."""
+    """List query definitions with optional filters.
+
+    If library is specified, queries only that library's _qrydfn table.
+    If library is None, queries all libraries' _qrydfn tables.
+    """
     queries = []
+
+    # Get list of libraries to query
+    if library:
+        libraries = [library.upper()]
+    else:
+        libraries = [lib['name'] for lib in list_libraries()]
+
     try:
         with get_cursor() as cursor:
-            sql = "SELECT * FROM query_definitions WHERE 1=1"
-            params = []
+            for lib in libraries:
+                lib_schema = lib.lower().replace('-', '_')
 
-            if library:
-                sql += " AND library = %s"
-                params.append(library.upper())
+                # Check if library schema and table exist
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_schema = %s AND table_name = '_qrydfn'
+                    )
+                """, (lib_schema,))
+                if not cursor.fetchone()[0]:
+                    continue
 
-            if created_by:
-                sql += " AND created_by = %s"
-                params.append(created_by.upper())
+                # Build query for this library
+                query = sql.SQL("SELECT * FROM {}._qrydfn WHERE 1=1").format(
+                    sql.Identifier(lib_schema)
+                )
+                params = []
 
-            sql += " ORDER BY library, name"
+                if created_by:
+                    query = sql.SQL("{} AND created_by = %s").format(query)
+                    params.append(created_by.upper())
 
-            cursor.execute(sql, params)
+                query = sql.SQL("{} ORDER BY name").format(query)
 
-            for row in cursor.fetchall():
-                queries.append({
-                    'name': row['name'],
-                    'library': row['library'],
-                    'description': row['description'],
-                    'source_schema': row['source_schema'],
-                    'source_table': row['source_table'],
-                    'created_by': row['created_by'],
-                    'created_at': str(row['created_at']) if row['created_at'] else '',
-                    'last_run_at': str(row['last_run_at']) if row['last_run_at'] else '',
-                })
+                cursor.execute(query, params)
+
+                for row in cursor.fetchall():
+                    queries.append({
+                        'name': row['name'],
+                        'library': lib,  # Add library from loop
+                        'description': row['text'],  # Column is 'text'
+                        'source_schema': row['source_schema'],
+                        'source_table': row['source_table'],
+                        'created_by': row['created_by'],
+                        'created_at': str(row['created']) if row['created'] else '',
+                        'last_run_at': str(row['last_run']) if row['last_run'] else '',
+                    })
+
+        # Sort by library, then name if we queried multiple libraries
+        if not library:
+            queries.sort(key=lambda q: (q['library'], q['name']))
+
     except Exception as e:
         logger.error(f"Failed to list queries: {e}")
 
