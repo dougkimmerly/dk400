@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir \
     uvicorn[standard] \
     websockets \
     celery \
-    redis
+    redis \
+    psycopg2-binary
 
 # Copy source
 COPY src /app/src

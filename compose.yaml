@@ -1,6 +1,24 @@
 name: dk400
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dk400-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: dk400
+      POSTGRES_USER: dk400
+      POSTGRES_PASSWORD: dk400secret
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dk400 -d dk400"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dk400
+
   redis:
     image: redis:7-alpine
     container_name: dk400-redis
@@ -87,13 +105,22 @@ services:
       - "8400:8400"
     environment:
       CELERY_BROKER_URL: redis://redis:6379/0
+      DK400_DB_HOST: postgres
+      DK400_DB_PORT: 5432
+      DK400_DB_NAME: dk400
+      DK400_DB_USER: dk400
+      DK400_DB_PASSWORD: dk400secret
     volumes:
       - ./src:/app/src:ro
+      - ./data:/app/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - dk400
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
 networks:
   dk400:

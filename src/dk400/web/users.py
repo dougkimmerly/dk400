@@ -2,21 +2,18 @@
 DK/400 User Management
 
 AS/400-style user profiles with password authentication.
-Uses PBKDF2 for secure password hashing.
+Uses PBKDF2 for secure password hashing, PostgreSQL for storage.
 """
-import os
-import json
 import hashlib
 import secrets
+import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 
+from src.dk400.web.database import get_cursor, init_database, check_connection
 
-# User data file location
-DATA_DIR = Path(os.environ.get('DK400_DATA_DIR', '/app/data'))
-USERS_FILE = DATA_DIR / 'users.json'
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -33,12 +30,21 @@ class UserProfile:
     signon_attempts: int = 0
     password_expires: str = "*NOMAX"
 
-    def to_dict(self) -> dict:
-        return asdict(self)
-
     @classmethod
-    def from_dict(cls, data: dict) -> 'UserProfile':
-        return cls(**data)
+    def from_row(cls, row: dict) -> 'UserProfile':
+        """Create UserProfile from database row."""
+        return cls(
+            username=row['username'],
+            password_hash=row['password_hash'],
+            salt=row['salt'],
+            user_class=row.get('user_class', '*USER'),
+            status=row.get('status', '*ENABLED'),
+            description=row.get('description', ''),
+            created=str(row['created']) if row.get('created') else '',
+            last_signon=str(row['last_signon']) if row.get('last_signon') else '',
+            signon_attempts=row.get('signon_attempts', 0),
+            password_expires=row.get('password_expires', '*NOMAX'),
+        )
 
 
 class UserManager:
@@ -49,61 +55,43 @@ class UserManager:
     HASH_ALGORITHM = 'sha256'
 
     def __init__(self):
-        self.users: dict[str, UserProfile] = {}
-        self._ensure_data_dir()
-        self._load_users()
-        self._ensure_default_users()
+        self._initialized = False
+        self._init_database()
 
-    def _ensure_data_dir(self):
-        """Ensure data directory exists."""
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+    def _init_database(self):
+        """Initialize database and ensure default users exist."""
+        try:
+            if not check_connection():
+                logger.warning("Database not available, will retry on next operation")
+                return
 
-    def _load_users(self):
-        """Load users from JSON file."""
-        if USERS_FILE.exists():
-            try:
-                with open(USERS_FILE, 'r') as f:
-                    data = json.load(f)
-                    for username, user_data in data.items():
-                        self.users[username] = UserProfile.from_dict(user_data)
-            except (json.JSONDecodeError, KeyError):
-                # Corrupted file, will recreate with defaults
-                self.users = {}
+            init_database()
+            self._ensure_default_users()
+            self._initialized = True
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
 
-    def _save_users(self):
-        """Save users to JSON file."""
-        data = {username: user.to_dict() for username, user in self.users.items()}
-        with open(USERS_FILE, 'w') as f:
-            json.dump(data, f, indent=2)
+    def _ensure_initialized(self):
+        """Ensure database is initialized before operations."""
+        if not self._initialized:
+            self._init_database()
 
     def _ensure_default_users(self):
         """Ensure default system users exist."""
-        # QSECOFR - Security Officer (admin)
-        if 'QSECOFR' not in self.users:
-            self.create_user(
-                username='QSECOFR',
-                password='QSECOFR',  # Default password, should be changed
-                user_class='*SECOFR',
-                description='Security Officer'
-            )
+        defaults = [
+            ('QSECOFR', 'QSECOFR', '*SECOFR', 'Security Officer'),
+            ('QSYSOPR', 'QSYSOPR', '*SYSOPR', 'System Operator'),
+            ('QUSER', 'QUSER', '*USER', 'Default User'),
+        ]
 
-        # QSYSOPR - System Operator
-        if 'QSYSOPR' not in self.users:
-            self.create_user(
-                username='QSYSOPR',
-                password='QSYSOPR',
-                user_class='*SYSOPR',
-                description='System Operator'
-            )
-
-        # QUSER - Default user
-        if 'QUSER' not in self.users:
-            self.create_user(
-                username='QUSER',
-                password='QUSER',
-                user_class='*USER',
-                description='Default User'
-            )
+        for username, password, user_class, description in defaults:
+            if not self.get_user(username):
+                self.create_user(
+                    username=username,
+                    password=password,
+                    user_class=user_class,
+                    description=description
+                )
 
     def _hash_password(self, password: str, salt: str) -> str:
         """Hash a password using PBKDF2."""
@@ -127,6 +115,8 @@ class UserManager:
         description: str = ""
     ) -> tuple[bool, str]:
         """Create a new user profile."""
+        self._ensure_initialized()
+
         username = username.upper().strip()
 
         if not username:
@@ -135,77 +125,99 @@ class UserManager:
         if len(username) > 10:
             return False, "Username must be 10 characters or less"
 
-        if username in self.users:
+        if self.get_user(username):
             return False, f"User {username} already exists"
 
         if not password:
             return False, "Password is required"
 
-        if len(password) < 1:
-            return False, "Password must be at least 1 character"
-
         salt = self._generate_salt()
         password_hash = self._hash_password(password.upper(), salt)
 
-        user = UserProfile(
-            username=username,
-            password_hash=password_hash,
-            salt=salt,
-            user_class=user_class,
-            description=description,
-            created=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-        )
-
-        self.users[username] = user
-        self._save_users()
-
-        return True, f"User {username} created"
+        try:
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO users (
+                        username, password_hash, salt, user_class,
+                        status, description, created
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    username,
+                    password_hash,
+                    salt,
+                    user_class,
+                    '*ENABLED',
+                    description,
+                    datetime.now(),
+                ))
+            return True, f"User {username} created"
+        except Exception as e:
+            logger.error(f"Failed to create user {username}: {e}")
+            return False, f"Failed to create user: {e}"
 
     def delete_user(self, username: str) -> tuple[bool, str]:
         """Delete a user profile."""
+        self._ensure_initialized()
+
         username = username.upper().strip()
 
         if username in ('QSECOFR', 'QSYSOPR', 'QUSER'):
             return False, f"Cannot delete system user {username}"
 
-        if username not in self.users:
+        if not self.get_user(username):
             return False, f"User {username} not found"
 
-        del self.users[username]
-        self._save_users()
-
-        return True, f"User {username} deleted"
+        try:
+            with get_cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM users WHERE username = %s",
+                    (username,)
+                )
+            return True, f"User {username} deleted"
+        except Exception as e:
+            logger.error(f"Failed to delete user {username}: {e}")
+            return False, f"Failed to delete user: {e}"
 
     def change_password(self, username: str, new_password: str) -> tuple[bool, str]:
         """Change a user's password."""
+        self._ensure_initialized()
+
         username = username.upper().strip()
 
-        if username not in self.users:
+        if not self.get_user(username):
             return False, f"User {username} not found"
 
         if not new_password:
             return False, "Password is required"
 
-        user = self.users[username]
-        user.salt = self._generate_salt()
-        user.password_hash = self._hash_password(new_password.upper(), user.salt)
+        salt = self._generate_salt()
+        password_hash = self._hash_password(new_password.upper(), salt)
 
-        self._save_users()
-
-        return True, f"Password changed for {username}"
+        try:
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    UPDATE users
+                    SET password_hash = %s, salt = %s
+                    WHERE username = %s
+                """, (password_hash, salt, username))
+            return True, f"Password changed for {username}"
+        except Exception as e:
+            logger.error(f"Failed to change password for {username}: {e}")
+            return False, f"Failed to change password: {e}"
 
     def authenticate(self, username: str, password: str) -> tuple[bool, str]:
         """Authenticate a user."""
+        self._ensure_initialized()
+
         username = username.upper().strip()
         password = password.upper() if password else ""
 
         if not username:
             return False, "Username is required"
 
-        if username not in self.users:
+        user = self.get_user(username)
+        if not user:
             return False, "User ID or password not valid"
-
-        user = self.users[username]
 
         if user.status == "*DISABLED":
             return False, f"User profile {username} is disabled"
@@ -214,52 +226,106 @@ class UserManager:
         password_hash = self._hash_password(password, user.salt)
 
         if password_hash != user.password_hash:
-            user.signon_attempts += 1
-            self._save_users()
+            # Increment failed attempts
+            try:
+                with get_cursor() as cursor:
+                    cursor.execute("""
+                        UPDATE users
+                        SET signon_attempts = signon_attempts + 1
+                        WHERE username = %s
+                    """, (username,))
+            except Exception:
+                pass
             return False, "User ID or password not valid"
 
-        # Successful authentication
-        user.signon_attempts = 0
-        user.last_signon = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        self._save_users()
+        # Successful authentication - update last signon
+        try:
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    UPDATE users
+                    SET signon_attempts = 0, last_signon = %s
+                    WHERE username = %s
+                """, (datetime.now(), username))
+        except Exception:
+            pass
 
-        return True, f"Sign on successful"
+        return True, "Sign on successful"
 
     def get_user(self, username: str) -> Optional[UserProfile]:
         """Get a user profile."""
+        self._ensure_initialized()
+
         username = username.upper().strip()
-        return self.users.get(username)
+
+        try:
+            with get_cursor() as cursor:
+                cursor.execute(
+                    "SELECT * FROM users WHERE username = %s",
+                    (username,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    return UserProfile.from_row(row)
+        except Exception as e:
+            logger.error(f"Failed to get user {username}: {e}")
+
+        return None
 
     def list_users(self) -> list[UserProfile]:
         """List all user profiles."""
-        return list(self.users.values())
+        self._ensure_initialized()
+
+        users = []
+        try:
+            with get_cursor() as cursor:
+                cursor.execute("SELECT * FROM users ORDER BY username")
+                for row in cursor.fetchall():
+                    users.append(UserProfile.from_row(row))
+        except Exception as e:
+            logger.error(f"Failed to list users: {e}")
+
+        return users
 
     def enable_user(self, username: str) -> tuple[bool, str]:
         """Enable a user profile."""
+        self._ensure_initialized()
+
         username = username.upper().strip()
 
-        if username not in self.users:
+        if not self.get_user(username):
             return False, f"User {username} not found"
 
-        self.users[username].status = "*ENABLED"
-        self._save_users()
-
-        return True, f"User {username} enabled"
+        try:
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    UPDATE users SET status = '*ENABLED' WHERE username = %s
+                """, (username,))
+            return True, f"User {username} enabled"
+        except Exception as e:
+            logger.error(f"Failed to enable user {username}: {e}")
+            return False, f"Failed to enable user: {e}"
 
     def disable_user(self, username: str) -> tuple[bool, str]:
         """Disable a user profile."""
+        self._ensure_initialized()
+
         username = username.upper().strip()
 
         if username == 'QSECOFR':
             return False, "Cannot disable QSECOFR"
 
-        if username not in self.users:
+        if not self.get_user(username):
             return False, f"User {username} not found"
 
-        self.users[username].status = "*DISABLED"
-        self._save_users()
-
-        return True, f"User {username} disabled"
+        try:
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    UPDATE users SET status = '*DISABLED' WHERE username = %s
+                """, (username,))
+            return True, f"User {username} disabled"
+        except Exception as e:
+            logger.error(f"Failed to disable user {username}: {e}")
+            return False, f"Failed to disable user: {e}"
 
 
 # Global instance
