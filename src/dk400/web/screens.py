@@ -5800,41 +5800,46 @@ class ScreenManager:
         content.append(pad_line(""))
 
         # Column headers
-        content.append([{"type": "text", "text": pad_line(" Opt  Query      Library    Description                     Updated"), "class": "field-reverse"}])
+        content.append([{"type": "text", "text": pad_line(" Opt  Query      Library    Description"), "class": "field-reverse"}])
 
-        # Query list
+        # Query list with blank creation row at top
         fields = []
-        page_queries = queries[offset:offset + page_size]
+
+        # Blank creation row (AS/400 style - type 1 and name to create)
+        fields.append({"id": "new_opt"})
+        fields.append({"id": "new_name"})
+        fields.append({"id": "new_lib"})
+        content.append([
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "new_opt", "width": 1, "value": "", "class": "field-input"},
+            {"type": "text", "text": "    "},
+            {"type": "input", "id": "new_name", "width": 10, "value": "", "class": "field-input"},
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "new_lib", "width": 10, "value": "QGPL", "class": "field-input"},
+        ])
+
+        # Existing queries
+        page_queries = queries[offset:offset + page_size - 1]  # -1 to account for creation row
 
         for i, q in enumerate(page_queries):
             field_id = f"opt_{i}"
             fields.append({"id": field_id})
 
-            # Format updated timestamp
-            updated = q.get('updated_at', q.get('created_at', ''))
-            if updated:
-                if isinstance(updated, str):
-                    updated_str = updated[:16] if len(updated) >= 16 else updated
-                else:
-                    updated_str = updated.strftime('%Y-%m-%d %H:%M')
-            else:
-                updated_str = ''
-
             content.append([
                 {"type": "text", "text": " "},
-                {"type": "input", "id": field_id, "width": 3, "value": "", "class": "field-input"},
-                {"type": "text", "text": f"  {q['name']:<10} {q['library']:<10} {q.get('description', '')[:30]:<30} {updated_str}"},
+                {"type": "input", "id": field_id, "width": 1, "value": "", "class": "field-input"},
+                {"type": "text", "text": f"    {q['name']:<10} {q['library']:<10} {q.get('description', '')[:40]}"},
             ])
 
-        # Pad empty rows
-        for _ in range(page_size - len(page_queries)):
+        # Pad empty rows (account for creation row taking one slot)
+        for _ in range(page_size - 1 - len(page_queries)):
             content.append(pad_line(""))
 
         # More/Bottom indicator
         total = len(queries)
         if total == 0:
-            indicator = "No queries defined"
-        elif offset + page_size >= total:
+            indicator = ""
+        elif offset + page_size - 1 >= total:
             indicator = "Bottom"
         else:
             indicator = "More..."
@@ -5852,7 +5857,7 @@ class ScreenManager:
         ])
         fields.append({"id": "cmd"})
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5870,27 +5875,39 @@ class ScreenManager:
         if cmd:
             return self.execute_command(session, cmd)
 
+        # Check for creation via blank row (AS/400 style)
+        new_opt = fields.get('new_opt', '').strip()
+        new_name = fields.get('new_name', '').strip().upper()
+        new_lib = fields.get('new_lib', 'QGPL').strip().upper() or 'QGPL'
+
+        if new_opt == '1':
+            if not new_name:
+                session.message = "Query name is required"
+                session.message_level = "error"
+                return self.get_screen(session, 'wrkqry')
+
+            # Clear any existing query state and start fresh
+            for key in list(session.field_values.keys()):
+                if key.startswith('qry_'):
+                    del session.field_values[key]
+            session.field_values['qry_mode'] = 'create'
+            session.field_values['qry_name'] = new_name
+            session.field_values['qry_library'] = new_lib
+            return self.get_screen(session, 'qrydefine')
+
         # Get current page of queries
         queries = list_query_definitions()
         offset = session.get_offset('wrkqry')
         page_size = self.PAGE_SIZES['wrkqry']
-        page_queries = queries[offset:offset + page_size]
+        page_queries = queries[offset:offset + page_size - 1]  # -1 for creation row
 
-        # Process options
+        # Process options on existing queries
         for i, q in enumerate(page_queries):
             opt = fields.get(f'opt_{i}', '').strip()
             if not opt:
                 continue
 
-            if opt == '1':
-                # Create new query - same as F6
-                for key in list(session.field_values.keys()):
-                    if key.startswith('qry_'):
-                        del session.field_values[key]
-                session.field_values['qry_mode'] = 'create'
-                return self.get_screen(session, 'qrydefine')
-
-            elif opt == '2':
+            if opt == '2':
                 # Change existing query
                 qry_def = get_query_definition(q['name'], q['library'])
                 if not qry_def:
@@ -6004,41 +6021,49 @@ class ScreenManager:
         ])
         content.append(pad_line(""))
 
-        # Menu options with current status
-        content.append(pad_line(" Type option number, press Enter."))
+        # Menu options with current status (AS/400 style - 1 beside each to select)
+        content.append(pad_line(" Type options, press Enter.  1=Select"))
         content.append(pad_line(""))
+        content.append([{"type": "text", "text": pad_line(" Opt  Query Option"), "class": "field-reverse"}])
         content.append([
             {"type": "text", "text": " "},
-            {"type": "input", "id": "option", "width": 2, "value": "", "class": "field-input"},
-            {"type": "text", "text": f"  1. Select file . . . . . . . . . . .  {file_status}"},
+            {"type": "input", "id": "opt1", "width": 1, "value": "", "class": "field-input"},
+            {"type": "text", "text": f"    Specify file selections  . . . .  {file_status}"},
         ])
         content.append([
-            {"type": "text", "text": "     "},
-            {"type": "text", "text": f"2. Select fields . . . . . . . . . .  {col_status}"},
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "opt2", "width": 1, "value": "", "class": "field-input"},
+            {"type": "text", "text": f"    Select and sequence fields . . .  {col_status}"},
         ])
         content.append([
-            {"type": "text", "text": "     "},
-            {"type": "text", "text": f"3. Select records (WHERE) . . . . .  {cond_status}"},
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "opt3", "width": 1, "value": "", "class": "field-input"},
+            {"type": "text", "text": f"    Select records . . . . . . . . .  {cond_status}"},
         ])
         content.append([
-            {"type": "text", "text": "     "},
-            {"type": "text", "text": f"4. Select sort fields . . . . . . .  {sort_status}"},
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "opt4", "width": 1, "value": "", "class": "field-input"},
+            {"type": "text", "text": f"    Select sort fields . . . . . . .  {sort_status}"},
         ])
         content.append([
-            {"type": "text", "text": "     "},
-            {"type": "text", "text": f"5. Select output type  . . . . . . .  {output_status}"},
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "opt5", "width": 1, "value": "", "class": "field-input"},
+            {"type": "text", "text": f"    Select output type and form  . .  {output_status}"},
         ])
         content.append([
-            {"type": "text", "text": "     "},
-            {"type": "text", "text": f"6. Specify row limit . . . . . . . .  {limit_status}"},
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "opt6", "width": 1, "value": "", "class": "field-input"},
+            {"type": "text", "text": f"    Specify processing options . . .  {limit_status}"},
         ])
         content.append([
-            {"type": "text", "text": "     "},
-            {"type": "text", "text": f"7. Select summary functions  . . . .  {summary_status}"},
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "opt7", "width": 1, "value": "", "class": "field-input"},
+            {"type": "text", "text": f"    Select summary functions . . . .  {summary_status}"},
         ])
         content.append([
-            {"type": "text", "text": "     "},
-            {"type": "text", "text": f"8. Define column formatting  . . . .  {format_status}"},
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "opt8", "width": 1, "value": "", "class": "field-input"},
+            {"type": "text", "text": f"    Define result fields . . . . . .  {format_status}"},
         ])
 
         # Pad to consistent height
@@ -6067,10 +6092,17 @@ class ScreenManager:
                 {"id": "name"},
                 {"id": "library"},
                 {"id": "desc"},
-                {"id": "option"},
+                {"id": "opt1"},
+                {"id": "opt2"},
+                {"id": "opt3"},
+                {"id": "opt4"},
+                {"id": "opt5"},
+                {"id": "opt6"},
+                {"id": "opt7"},
+                {"id": "opt8"},
                 {"id": "cmd"},
             ],
-            "activeField": 3,  # Focus on option field
+            "activeField": 3,  # Focus on first option field
         }
 
     def _submit_qrydefine(self, session: Session, fields: dict) -> dict:
@@ -6084,62 +6116,64 @@ class ScreenManager:
         qry_name = fields.get('name', '').strip().upper()
         qry_library = fields.get('library', 'QGPL').strip().upper() or 'QGPL'
         qry_desc = fields.get('desc', '').strip()
-        option = fields.get('option', '').strip()
 
         # Save field values to session
         session.field_values['qry_name'] = qry_name
         session.field_values['qry_library'] = qry_library
         session.field_values['qry_desc'] = qry_desc
 
-        # Handle menu options
-        if option == '1':
-            # Select file
+        # Handle menu options (AS/400 style - check each option field)
+        if fields.get('opt1', '').strip() == '1':
+            # Specify file selections
             return self.get_screen(session, 'qryfiles')
-        elif option == '2':
-            # Select fields - must have file selected first
+
+        if fields.get('opt2', '').strip() == '1':
+            # Select and sequence fields - must have file selected first
             if not session.field_values.get('qry_schema') or not session.field_values.get('qry_table'):
-                session.message = "Select file first (option 1)"
+                session.message = "Specify file selections first"
                 session.message_level = "error"
                 return self.get_screen(session, 'qrydefine')
             return self.get_screen(session, 'qryfields')
-        elif option == '3':
+
+        if fields.get('opt3', '').strip() == '1':
             # Select records (WHERE) - must have file selected
             if not session.field_values.get('qry_schema') or not session.field_values.get('qry_table'):
-                session.message = "Select file first (option 1)"
+                session.message = "Specify file selections first"
                 session.message_level = "error"
                 return self.get_screen(session, 'qrydefine')
             return self.get_screen(session, 'qrywhere')
-        elif option == '4':
+
+        if fields.get('opt4', '').strip() == '1':
             # Sort fields - must have file selected
             if not session.field_values.get('qry_schema') or not session.field_values.get('qry_table'):
-                session.message = "Select file first (option 1)"
+                session.message = "Specify file selections first"
                 session.message_level = "error"
                 return self.get_screen(session, 'qrydefine')
             return self.get_screen(session, 'qrysort')
-        elif option == '5':
+
+        if fields.get('opt5', '').strip() == '1':
             # Output type
             return self.get_screen(session, 'qryoutput')
-        elif option == '6':
-            # Row limit
+
+        if fields.get('opt6', '').strip() == '1':
+            # Processing options (row limit)
             return self.get_screen(session, 'qrylimit')
-        elif option == '7':
-            # Summary functions - must have columns selected first
+
+        if fields.get('opt7', '').strip() == '1':
+            # Summary functions - must have file selected
             if not session.field_values.get('qry_schema') or not session.field_values.get('qry_table'):
-                session.message = "Select file first (option 1)"
+                session.message = "Specify file selections first"
                 session.message_level = "error"
                 return self.get_screen(session, 'qrydefine')
             return self.get_screen(session, 'qrysummary')
-        elif option == '8':
-            # Column formatting - must have columns selected first
+
+        if fields.get('opt8', '').strip() == '1':
+            # Define result fields (formatting) - must have columns selected
             if not session.field_values.get('qry_columns'):
-                session.message = "Select fields first (option 2)"
+                session.message = "Select and sequence fields first"
                 session.message_level = "error"
                 return self.get_screen(session, 'qrydefine')
             return self.get_screen(session, 'qryformat')
-        elif option:
-            session.message = f"Option {option} not valid"
-            session.message_level = "error"
-            return self.get_screen(session, 'qrydefine')
 
         # No option selected, just refresh
         return self.get_screen(session, 'qrydefine')
