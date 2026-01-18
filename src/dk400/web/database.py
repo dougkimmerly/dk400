@@ -5080,7 +5080,7 @@ BEGIN
                     record_key, before_image
                 ) VALUES (
                     v_receiver_name, v_receiver_lib, 'F', 'UB',
-                    current_user, TG_NAME, TG_TABLE_SCHEMA, TG_TABLE_NAME,
+                    LEFT(current_user, 10), LEFT(TG_NAME, 10), TG_TABLE_SCHEMA, TG_TABLE_NAME,
                     OLD::TEXT, to_jsonb(OLD)
                 );
             END IF;
@@ -5100,7 +5100,7 @@ BEGIN
         record_key, before_image, after_image
     ) VALUES (
         v_receiver_name, v_receiver_lib, 'F', v_entry_type,
-        current_user, TG_NAME, TG_TABLE_SCHEMA, TG_TABLE_NAME,
+        LEFT(current_user, 10), LEFT(TG_NAME, 10), TG_TABLE_SCHEMA, TG_TABLE_NAME,
         v_record_key, v_before_img, v_after_img
     );
 
