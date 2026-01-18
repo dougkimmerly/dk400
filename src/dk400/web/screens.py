@@ -3455,6 +3455,124 @@ class ScreenManager:
             return self.get_screen(session, 'wrkusrprf')
         return self.get_screen(session, 'user_create')
 
+    def _screen_user_change(self, session: Session) -> dict:
+        """Change User Profile screen (CHGUSRPRF)."""
+        hostname, date_str, time_str = get_system_info()
+        username = session.field_values.get('selected_user', '')
+
+        user = user_manager.get_user(username)
+        if not user:
+            session.message = f"User {username} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkusrprf')
+
+        content = []
+
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Change User Profile (CHGUSRPRF)                      {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"    User profile  . . . . . . . . . :   {user.username}"))
+        content.append(pad_line(f"    Status  . . . . . . . . . . . . :   {user.status}"))
+        content.append(pad_line(""))
+
+        # Get current values or previously entered values
+        user_class_val = session.field_values.get('f4_selected_user_class') or session.field_values.get('chg_user_class', user.user_class)
+        group_profile_val = session.field_values.get('f4_selected_group_profile') or session.field_values.get('chg_group_profile', user.group_profile)
+        description_val = session.field_values.get('chg_description', user.description)
+
+        content.append([
+            {"type": "text", "text": "    User class  . . . . . . . . . . :   "},
+            {"type": "input", "id": "chg_user_class", "width": 10, "value": user_class_val},
+        ])
+        content.append([
+            {"type": "text", "text": "    Group profile . . . . . . . . . :   "},
+            {"type": "input", "id": "chg_group_profile", "width": 10, "value": group_profile_val},
+        ])
+        content.append([
+            {"type": "text", "text": "    Description . . . . . . . . . . :   "},
+            {"type": "input", "id": "chg_description", "width": 30, "value": description_val},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line("    Valid classes: *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER"))
+        content.append(pad_line("    Group profile: User to inherit authorities from (*NONE for none)"))
+        content.append(pad_line(""))
+        content.append(pad_line("    Use option 8=Change Password from WRKUSRPRF to change password."))
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "user_change",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "chg_user_class"},
+                {"id": "chg_group_profile"},
+                {"id": "chg_description"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_user_change(self, session: Session, fields: dict) -> dict:
+        """Handle Change User Profile submission."""
+        username = session.field_values.get('selected_user', '')
+
+        if not username:
+            session.message = "No user selected"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkusrprf')
+
+        user_class = fields.get('chg_user_class', '').strip().upper()
+        group_profile = fields.get('chg_group_profile', '').strip().upper()
+        description = fields.get('chg_description', '').strip()
+
+        # Validate user class
+        valid_classes = ('*SECOFR', '*SECADM', '*PGMR', '*SYSOPR', '*USER')
+        if user_class and user_class not in valid_classes:
+            session.message = f"User class must be one of: {', '.join(valid_classes)}"
+            session.message_level = "error"
+            # Store values for redisplay
+            session.field_values['chg_user_class'] = user_class
+            session.field_values['chg_group_profile'] = group_profile
+            session.field_values['chg_description'] = description
+            return self.get_screen(session, 'user_change')
+
+        # Update the user
+        success, msg = user_manager.update_user(
+            username=username,
+            user_class=user_class if user_class else None,
+            description=description if description else None,
+            group_profile=group_profile if group_profile else None,
+        )
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            # Clear temporary values
+            session.field_values.pop('chg_user_class', None)
+            session.field_values.pop('chg_group_profile', None)
+            session.field_values.pop('chg_description', None)
+            session.field_values.pop('f4_selected_user_class', None)
+            session.field_values.pop('f4_selected_group_profile', None)
+            return self.get_screen(session, 'wrkusrprf')
+
+        return self.get_screen(session, 'user_change')
+
     # ========== SCHEMA AND OBJECT AUTHORITY SCREENS ==========
 
     def _screen_wrkschema(self, session: Session) -> dict:

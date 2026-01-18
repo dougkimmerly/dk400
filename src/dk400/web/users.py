@@ -287,6 +287,65 @@ class UserManager:
             return True, f"Group profile changed for {username}"
         return False, msg
 
+    def update_user(
+        self,
+        username: str,
+        user_class: str = None,
+        description: str = None,
+        group_profile: str = None,
+    ) -> tuple[bool, str]:
+        """Update a user profile (CHGUSRPRF equivalent).
+
+        Only non-None parameters are updated.
+        """
+        self._ensure_initialized()
+
+        username = username.upper().strip()
+
+        if not self.get_user(username):
+            return False, f"User {username} not found"
+
+        # Build update query dynamically
+        updates = []
+        values = []
+
+        if user_class is not None:
+            user_class = user_class.upper().strip()
+            if user_class not in ('*SECOFR', '*SECADM', '*PGMR', '*SYSOPR', '*USER'):
+                return False, f"Invalid user class: {user_class}"
+            updates.append("user_class = %s")
+            values.append(user_class)
+
+        if description is not None:
+            updates.append("description = %s")
+            values.append(description.strip())
+
+        if group_profile is not None:
+            group_profile = group_profile.upper().strip() if group_profile else "*NONE"
+            if group_profile and group_profile != "*NONE":
+                if not self.get_user(group_profile):
+                    return False, f"Group profile {group_profile} not found"
+            updates.append("group_profile = %s")
+            values.append(group_profile)
+            # Also update PostgreSQL role
+            set_group_profile(username, group_profile)
+
+        if not updates:
+            return True, "No changes specified"
+
+        values.append(username)
+
+        try:
+            with get_cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE qsys.users SET {', '.join(updates)} WHERE username = %s",
+                    values
+                )
+            return True, f"User {username} changed"
+        except Exception as e:
+            logger.error(f"Failed to update user {username}: {e}")
+            return False, f"Failed to update user: {e}"
+
     def authenticate(self, username: str, password: str) -> tuple[bool, str]:
         """Authenticate a user."""
         self._ensure_initialized()
