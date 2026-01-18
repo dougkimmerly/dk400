@@ -352,6 +352,26 @@ class ScreenManager:
             # Check if we have a focused field that has parameter prompts
             active_field = fields.get('_active_field', '').lower()
 
+            # Special handling for qryfiles screen - schema/table prompts
+            if screen == 'qryfiles':
+                if active_field == 'schema':
+                    return self.get_screen(session, 'qryschemas')
+                elif active_field == 'table':
+                    # Need schema first
+                    schema = fields.get('schema', '').strip()
+                    if not schema:
+                        session.message = "Enter schema first, then F4 for tables"
+                        session.message_level = "error"
+                        return self.get_screen(session, 'qryfiles')
+                    session.field_values['qry_prompt_schema'] = schema.lower()
+                    return self.get_screen(session, 'qrytables')
+                # Fall through to schema list if no field focused
+                return self.get_screen(session, 'qryschemas')
+
+            # Special handling for qrycond screen - column list
+            if screen == 'qrycond' and active_field == 'field':
+                return self.get_screen(session, 'qrycolumns')
+
             # If on command line or no active field, show command list
             if not active_field or active_field == 'cmd':
                 cmd_input = fields.get('cmd', '').strip().upper()
@@ -508,13 +528,18 @@ class ScreenManager:
             # Query screens
             elif screen == 'qrydefine':
                 return self.get_screen(session, 'wrkqry')
-            elif screen in ('qryfiles', 'qryfields', 'qrywhere', 'qrysort'):
+            elif screen in ('qryfiles', 'qryfields', 'qrywhere', 'qrysort', 'qryoutput', 'qrylimit'):
                 return self.get_screen(session, 'qrydefine')
             elif screen == 'qrycond':
                 return self.get_screen(session, 'qrywhere')
             elif screen == 'qryrun':
                 # Could come from wrkqry (option 5) or qrydefine (F5)
                 return_screen = session.field_values.get('qry_return_screen', 'wrkqry')
+                return self.get_screen(session, return_screen)
+            # Query F4 prompt screens
+            elif screen in ('qryschemas', 'qrytables', 'qrycolumns'):
+                return_screen = session.field_values.get('f4_return_screen', 'qryfiles')
+                session.field_values.pop('qry_prompt_schema', None)
                 return self.get_screen(session, return_screen)
             # Command list (F4 prompt)
             elif screen == 'cmdlist':
@@ -5923,6 +5948,9 @@ class ScreenManager:
         qry_conditions = session.field_values.get('qry_conditions', [])
         qry_orderby = session.field_values.get('qry_orderby', [])
 
+        qry_output = session.field_values.get('qry_output', '*DISPLAY')
+        qry_limit = session.field_values.get('qry_limit', 0)
+
         # Format status indicators
         file_status = f"{qry_schema}.{qry_table}" if qry_schema and qry_table else "(not selected)"
         col_count = len(qry_columns) if qry_columns else 0
@@ -5931,6 +5959,8 @@ class ScreenManager:
         cond_status = f"{cond_count} condition(s)" if cond_count else "(none)"
         sort_count = len(qry_orderby) if qry_orderby else 0
         sort_status = f"{sort_count} field(s)" if sort_count else "(none)"
+        output_status = qry_output
+        limit_status = str(qry_limit) if qry_limit else "(all rows)"
 
         title = "Define Query" if mode == 'create' else f"Change Query - {qry_name}"
 
@@ -5980,8 +6010,14 @@ class ScreenManager:
             {"type": "text", "text": "     "},
             {"type": "text", "text": f"4. Select sort fields . . . . . . .  {sort_status}"},
         ])
-        content.append(pad_line(""))
-        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "     "},
+            {"type": "text", "text": f"5. Select output type  . . . . . . .  {output_status}"},
+        ])
+        content.append([
+            {"type": "text", "text": "     "},
+            {"type": "text", "text": f"6. Specify row limit . . . . . . . .  {limit_status}"},
+        ])
 
         # Pad to consistent height
         while len(content) < 19:
@@ -6058,6 +6094,12 @@ class ScreenManager:
                 session.message_level = "error"
                 return self.get_screen(session, 'qrydefine')
             return self.get_screen(session, 'qrysort')
+        elif option == '5':
+            # Output type
+            return self.get_screen(session, 'qryoutput')
+        elif option == '6':
+            # Row limit
+            return self.get_screen(session, 'qrylimit')
         elif option:
             session.message = f"Option {option} not valid"
             session.message_level = "error"
@@ -6977,3 +7019,404 @@ class ScreenManager:
     def _submit_qryrun(self, session: Session, fields: dict) -> dict:
         """Handle Run Query submission (refresh)."""
         return self.get_screen(session, 'qryrun')
+
+    # ==========================================================================
+    # Query F4 Prompt Screens
+    # ==========================================================================
+
+    def _screen_qryschemas(self, session: Session) -> dict:
+        """Schema list for F4 prompt."""
+        hostname, date_str, time_str = get_system_info()
+
+        schemas = list_schemas()
+        # Filter to show common schemas first
+        priority_schemas = ['public', 'dk400']
+        schemas.sort(key=lambda s: (0 if s['name'] in priority_schemas else 1, s['name']))
+
+        page_size = 12
+        offset = session.get_offset('qryschemas')
+
+        content = []
+        content.append(pad_line(f" {hostname:<20}       Select Schema                            {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type 1 to select schema, press Enter."))
+        content.append(pad_line(""))
+
+        content.append([{"type": "text", "text": pad_line(" Opt  Schema Name                    Tables"), "class": "field-reverse"}])
+
+        fields = []
+        page_schemas = schemas[offset:offset + page_size]
+
+        for i, s in enumerate(page_schemas):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": field_id, "width": 1, "value": "", "class": "field-input"},
+                {"type": "text", "text": f"    {s['name']:<30} {s.get('table_count', ''):>6}"},
+            ])
+
+        for _ in range(page_size - len(page_schemas)):
+            content.append(pad_line(""))
+
+        total = len(schemas)
+        indicator = "Bottom" if offset + page_size >= total else "More..."
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+
+        return {
+            "type": "screen",
+            "screen": "qryschemas",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qryschemas(self, session: Session, fields: dict) -> dict:
+        """Handle schema selection."""
+        schemas = list_schemas()
+        priority_schemas = ['public', 'dk400']
+        schemas.sort(key=lambda s: (0 if s['name'] in priority_schemas else 1, s['name']))
+
+        offset = session.get_offset('qryschemas')
+        page_size = 12
+        page_schemas = schemas[offset:offset + page_size]
+
+        for i, s in enumerate(page_schemas):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '1':
+                session.field_values['qry_schema'] = s['name']
+                session.message = f"Schema {s['name']} selected"
+                session.message_level = "info"
+                return self.get_screen(session, 'qryfiles')
+
+        return self.get_screen(session, 'qryschemas')
+
+    def _screen_qrytables(self, session: Session) -> dict:
+        """Table list for F4 prompt."""
+        hostname, date_str, time_str = get_system_info()
+
+        schema = session.field_values.get('qry_prompt_schema', 'public')
+        tables = list_schema_tables(schema)
+
+        page_size = 12
+        offset = session.get_offset('qrytables')
+
+        content = []
+        content.append(pad_line(f" {hostname:<20}       Select Table                             {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(f" Schema: {schema}"))
+
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type 1 to select table, press Enter."))
+        content.append(pad_line(""))
+
+        content.append([{"type": "text", "text": pad_line(" Opt  Table Name                      Type       Rows"), "class": "field-reverse"}])
+
+        fields = []
+        page_tables = tables[offset:offset + page_size]
+
+        for i, t in enumerate(page_tables):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            tbl_type = 'VIEW' if t.get('type') == 'view' else 'TABLE'
+            row_count = t.get('row_count', '')
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": field_id, "width": 1, "value": "", "class": "field-input"},
+                {"type": "text", "text": f"    {t['name']:<32} {tbl_type:<8} {row_count:>8}"},
+            ])
+
+        for _ in range(page_size - len(page_tables)):
+            content.append(pad_line(""))
+
+        total = len(tables)
+        if total == 0:
+            indicator = "No tables"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+
+        return {
+            "type": "screen",
+            "screen": "qrytables",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qrytables(self, session: Session, fields: dict) -> dict:
+        """Handle table selection."""
+        schema = session.field_values.get('qry_prompt_schema', 'public')
+        tables = list_schema_tables(schema)
+
+        offset = session.get_offset('qrytables')
+        page_size = 12
+        page_tables = tables[offset:offset + page_size]
+
+        for i, t in enumerate(page_tables):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '1':
+                session.field_values['qry_schema'] = schema
+                session.field_values['qry_table'] = t['name']
+                session.field_values['qry_columns'] = []  # Reset columns
+                session.message = f"Table {schema}.{t['name']} selected"
+                session.message_level = "info"
+                return self.get_screen(session, 'qryfiles')
+
+        return self.get_screen(session, 'qrytables')
+
+    def _screen_qrycolumns(self, session: Session) -> dict:
+        """Column list for F4 prompt (used in qrycond)."""
+        hostname, date_str, time_str = get_system_info()
+
+        schema = session.field_values.get('qry_schema', '')
+        table = session.field_values.get('qry_table', '')
+        columns = list_table_columns(schema, table) if schema and table else []
+
+        page_size = 12
+        offset = session.get_offset('qrycolumns')
+
+        content = []
+        content.append(pad_line(f" {hostname:<20}       Select Column                            {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(f" File: {schema}.{table}"))
+
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type 1 to select column, press Enter."))
+        content.append(pad_line(""))
+
+        content.append([{"type": "text", "text": pad_line(" Opt  Column Name                    Type"), "class": "field-reverse"}])
+
+        fields = []
+        page_columns = columns[offset:offset + page_size]
+
+        for i, c in enumerate(page_columns):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            col_type = c.get('data_type', '')[:15]
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": field_id, "width": 1, "value": "", "class": "field-input"},
+                {"type": "text", "text": f"    {c['name']:<30} {col_type}"},
+            ])
+
+        for _ in range(page_size - len(page_columns)):
+            content.append(pad_line(""))
+
+        total = len(columns)
+        if total == 0:
+            indicator = "No columns"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                              {indicator}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+
+        return {
+            "type": "screen",
+            "screen": "qrycolumns",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qrycolumns(self, session: Session, fields: dict) -> dict:
+        """Handle column selection for qrycond."""
+        schema = session.field_values.get('qry_schema', '')
+        table = session.field_values.get('qry_table', '')
+        columns = list_table_columns(schema, table) if schema and table else []
+
+        offset = session.get_offset('qrycolumns')
+        page_size = 12
+        page_columns = columns[offset:offset + page_size]
+
+        for i, c in enumerate(page_columns):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '1':
+                # Set the field value for qrycond
+                session.field_values['qry_cond_field'] = c['name']
+                return self.get_screen(session, 'qrycond')
+
+        return self.get_screen(session, 'qrycolumns')
+
+    def _screen_qryoutput(self, session: Session) -> dict:
+        """Select Output Type screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        qry_output = session.field_values.get('qry_output', '*DISPLAY')
+
+        content = []
+        content.append(pad_line(f" {hostname:<20}       Select Output Type                       {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type 1 to select output type, press Enter."))
+        content.append(pad_line(""))
+
+        content.append([{"type": "text", "text": pad_line(" Sel  Output Type      Description"), "class": "field-reverse"}])
+
+        output_types = [
+            ('*DISPLAY', 'Display on screen'),
+            ('*PRINT', 'Print to spooled file'),
+            ('*OUTFILE', 'Write to database table'),
+        ]
+
+        fields = []
+        for i, (code, desc) in enumerate(output_types):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+            selected = "1" if qry_output == code else ""
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": field_id, "width": 1, "value": selected, "class": "field-input"},
+                {"type": "text", "text": f"    {code:<14} {desc}"},
+            ])
+
+        for _ in range(8):
+            content.append(pad_line(""))
+
+        content.append(pad_line("                                                              Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "qryoutput",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qryoutput(self, session: Session, fields: dict) -> dict:
+        """Handle output type selection."""
+        output_types = ['*DISPLAY', '*PRINT', '*OUTFILE']
+
+        for i, code in enumerate(output_types):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '1':
+                session.field_values['qry_output'] = code
+                session.message = f"Output type set to {code}"
+                session.message_level = "info"
+                return self.get_screen(session, 'qrydefine')
+
+        return self.get_screen(session, 'qryoutput')
+
+    def _screen_qrylimit(self, session: Session) -> dict:
+        """Specify Row Limit screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        qry_limit = session.field_values.get('qry_limit', 0)
+
+        content = []
+        content.append(pad_line(f" {hostname:<20}       Specify Row Limit                        {session.user:>10}"))
+        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type number of rows to return (0 = all rows)."))
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": " Row limit . . . . . . . "},
+            {"type": "input", "id": "limit", "width": 10, "value": str(qry_limit) if qry_limit else "0", "class": "field-input"},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line(" Common values:"))
+        content.append(pad_line("   0 = Return all rows (no limit)"))
+        content.append(pad_line("   100 = First 100 rows"))
+        content.append(pad_line("   1000 = First 1000 rows"))
+
+        while len(content) < 19:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "qrylimit",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "limit"}],
+            "activeField": 0,
+        }
+
+    def _submit_qrylimit(self, session: Session, fields: dict) -> dict:
+        """Handle row limit entry."""
+        limit_str = fields.get('limit', '0').strip()
+
+        try:
+            limit = int(limit_str)
+            if limit < 0:
+                limit = 0
+            session.field_values['qry_limit'] = limit
+            if limit == 0:
+                session.message = "Row limit removed (all rows)"
+            else:
+                session.message = f"Row limit set to {limit} rows"
+            session.message_level = "info"
+            return self.get_screen(session, 'qrydefine')
+        except ValueError:
+            session.message = "Invalid number. Enter 0 or a positive integer."
+            session.message_level = "error"
+            return self.get_screen(session, 'qrylimit')
