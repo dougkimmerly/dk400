@@ -8416,11 +8416,11 @@ class ScreenManager:
         page_cols = columns[offset:offset + page_size]
         for col in page_cols:
             data_type = col.get('data_type', 'UNKNOWN').upper()
-            length = col.get('character_maximum_length', '')
-            if not length and col.get('numeric_precision'):
-                length = f"{col['numeric_precision']},{col.get('numeric_scale', 0)}"
-            nullable = 'Y' if col.get('is_nullable', 'YES') == 'YES' else 'N'
-            content.append(pad_line(f" {col['column_name'][:18]:<18} {data_type[:15]:<15} {str(length)[:7]:<7} {nullable}"))
+            length = col.get('max_length', '')
+            if not length and col.get('precision'):
+                length = f"{col['precision']},{col.get('scale', 0)}"
+            nullable = 'Y' if col.get('nullable', True) else 'N'
+            content.append(pad_line(f" {col['name'][:18]:<18} {data_type[:15]:<15} {str(length)[:7]:<7} {nullable}"))
 
         while len(content) < 20:
             content.append(pad_line(""))
