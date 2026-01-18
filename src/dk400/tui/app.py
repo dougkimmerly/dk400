@@ -36,8 +36,12 @@ class SignOnScreen(Screen):
 
     BINDINGS = [
         Binding("enter", "sign_on", "Sign On", show=False),
-        Binding("f3", "quit", "Exit", show=True),
+        Binding("f3", "exit_session", "Exit", show=True),
     ]
+
+    def action_exit_session(self) -> None:
+        """Exit the application completely (ends SSH session)."""
+        self.app.exit()
 
     CSS = """
     SignOnScreen {
