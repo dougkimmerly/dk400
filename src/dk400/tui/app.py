@@ -11,6 +11,8 @@ from textual.binding import Binding
 from datetime import datetime
 import socket
 
+from src.dk400.tui.screens.wrkactjob import WrkActJobScreen
+
 
 LOGO = r"""
   ____  _  ______ ___   ___   ___
@@ -283,7 +285,8 @@ class MainMenuScreen(Screen):
         self.app.pop_screen()
 
     def action_wrkactjob(self) -> None:
-        self.notify("WRKACTJOB - Coming in Phase 1!", title="DK/400")
+        """Work with active jobs."""
+        self.app.push_screen("wrkactjob")
 
     def action_wrkjobq(self) -> None:
         self.notify("WRKJOBQ - Coming in Phase 1!", title="DK/400")
@@ -321,6 +324,7 @@ class DK400App(App):
     SCREENS = {
         "signon": SignOnScreen,
         "main": MainMenuScreen,
+        "wrkactjob": WrkActJobScreen,
     }
 
     def __init__(self):
