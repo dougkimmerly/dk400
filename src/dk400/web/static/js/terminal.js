@@ -239,16 +239,6 @@ class Terminal5250 {
                 }
                 break;
 
-            case 'ArrowDown':
-                e.preventDefault();
-                this.focusNextField();
-                break;
-
-            case 'ArrowUp':
-                e.preventDefault();
-                this.focusPreviousField();
-                break;
-
             case 'F1':
             case 'F2':
             case 'F3':
@@ -272,12 +262,34 @@ class Terminal5250 {
 
             case 'PageUp':
                 e.preventDefault();
-                this.handleFunctionKey('PageUp');
+                this.handleRoll('up');
                 break;
 
             case 'PageDown':
                 e.preventDefault();
-                this.handleFunctionKey('PageDown');
+                this.handleRoll('down');
+                break;
+
+            case 'ArrowUp':
+                // Cmd+Up or Opt+Up = Roll Up
+                if (e.metaKey || e.altKey) {
+                    e.preventDefault();
+                    this.handleRoll('up');
+                } else {
+                    e.preventDefault();
+                    this.focusPreviousField();
+                }
+                break;
+
+            case 'ArrowDown':
+                // Cmd+Down or Opt+Down = Roll Down
+                if (e.metaKey || e.altKey) {
+                    e.preventDefault();
+                    this.handleRoll('down');
+                } else {
+                    e.preventDefault();
+                    this.focusNextField();
+                }
                 break;
         }
     }
@@ -343,6 +355,15 @@ class Terminal5250 {
             key: key,
             screen: this.currentScreen,
             fields: fieldValues
+        });
+    }
+
+    handleRoll(direction) {
+        this.showBusy();
+        this.send({
+            action: 'roll',
+            direction: direction,
+            screen: this.currentScreen
         });
     }
 

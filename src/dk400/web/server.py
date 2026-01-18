@@ -102,6 +102,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 result = screen_manager.handle_function_key(session, screen, key, fields)
                 await websocket.send_json(result)
 
+            elif action == "roll":
+                # Handle Roll Up/Roll Down (page up/down)
+                direction = data.get("direction")
+                screen = data.get("screen")
+                result = screen_manager.handle_roll(session, screen, direction)
+                await websocket.send_json(result)
+
             elif action == "field_update":
                 # Real-time field update (optional)
                 field = data.get("field")

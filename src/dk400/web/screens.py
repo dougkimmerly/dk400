@@ -64,6 +64,19 @@ class Session:
     field_values: dict = field(default_factory=dict)
     message: str = ""
     message_level: str = "info"
+    page_offsets: dict = field(default_factory=dict)  # {screen_name: offset}
+
+    def get_offset(self, screen: str) -> int:
+        """Get current page offset for a screen."""
+        return self.page_offsets.get(screen, 0)
+
+    def set_offset(self, screen: str, offset: int):
+        """Set page offset for a screen."""
+        self.page_offsets[screen] = max(0, offset)
+
+    def reset_offset(self, screen: str):
+        """Reset page offset when entering a screen."""
+        self.page_offsets[screen] = 0
 
 
 class ScreenManager:
@@ -123,6 +136,26 @@ class ScreenManager:
             if screen in ('signon', 'main'):
                 return self.get_screen(session, screen)
             return self.get_screen(session, 'main')
+
+        return self.get_screen(session, screen)
+
+    # Page sizes for scrollable screens
+    PAGE_SIZES = {
+        'wrkactjob': 12,
+        'wrkjobq': 10,
+        'wrksvc': 15,
+        'dsplog': 16,
+    }
+
+    def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
+        """Handle Roll Up/Roll Down (page up/down)."""
+        page_size = self.PAGE_SIZES.get(screen, 10)
+        current_offset = session.get_offset(screen)
+
+        if direction == 'down':
+            session.set_offset(screen, current_offset + page_size)
+        elif direction == 'up':
+            session.set_offset(screen, current_offset - page_size)
 
         return self.get_screen(session, screen)
 
@@ -270,7 +303,30 @@ class ScreenManager:
     def _screen_wrkactjob(self, session: Session) -> dict:
         """Work with Active Jobs - 80 columns."""
         hostname, date_str, time_str = get_system_info()
-        jobs = self._get_celery_jobs()
+        all_jobs = self._get_celery_jobs()
+
+        # Pagination
+        page_size = self.PAGE_SIZES['wrkactjob']
+        offset = session.get_offset('wrkactjob')
+        total = len(all_jobs)
+
+        # Clamp offset to valid range
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('wrkactjob', offset)
+
+        jobs = all_jobs[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            if offset + page_size >= total:
+                pos_indicator = "Bottom"
+            elif offset == 0:
+                pos_indicator = "More..."
+            else:
+                pos_indicator = "More..."
+        else:
+            pos_indicator = ""
 
         content = [
             pad_line(f" {hostname:<20}       Work with Active Jobs                  {session.user:>10}"),
@@ -283,7 +339,7 @@ class ScreenManager:
         ]
 
         fields = []
-        for i, job in enumerate(jobs[:12]):
+        for i, job in enumerate(jobs):
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
                 {"type": "text", "text": f"  {job['name']:<10}  {job['user']:<10}  {job['type']:<5}  {job['status']:<10}  {job['cpu']:>4}  {job['function']:<15}"},
@@ -291,20 +347,22 @@ class ScreenManager:
             content.append(row)
             fields.append({"id": f"opt_{i}"})
 
-        while len(content) < 20:
+        while len(content) < 19:
             content.append(pad_line(""))
+
+        # Position/More indicator on the right
+        content.append(pad_line(f"                                                              {pos_indicator:>12}"))
 
         msg = session.message if session.message else ""
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" Parameters or command"))
         content.append([
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up"))
 
         return {
             "type": "screen",
@@ -382,7 +440,24 @@ class ScreenManager:
     def _screen_wrkjobq(self, session: Session) -> dict:
         """Work with Job Queues - 80 columns."""
         hostname, date_str, time_str = get_system_info()
-        queues = self._get_celery_queues()
+        all_queues = self._get_celery_queues()
+
+        # Pagination
+        page_size = self.PAGE_SIZES['wrkjobq']
+        offset = session.get_offset('wrkjobq')
+        total = len(all_queues)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('wrkjobq', offset)
+
+        queues = all_queues[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            pos_indicator = "Bottom" if offset + page_size >= total else "More..."
+        else:
+            pos_indicator = ""
 
         content = [
             pad_line(f" {hostname:<20}       Work with Job Queues                  {session.user:>10}"),
@@ -395,7 +470,7 @@ class ScreenManager:
         ]
 
         fields = []
-        for i, q in enumerate(queues[:10]):
+        for i, q in enumerate(queues):
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
                 {"type": "text", "text": f"  {q['name']:<12}  {q['lib']:<10}  {q['status']:<10}  {q['jobs']:>4}   {q['subsystem']}"},
@@ -403,8 +478,10 @@ class ScreenManager:
             content.append(row)
             fields.append({"id": f"opt_{i}"})
 
-        while len(content) < 20:
+        while len(content) < 19:
             content.append(pad_line(""))
+
+        content.append(pad_line(f"                                                              {pos_indicator:>12}"))
 
         msg = session.message if session.message else ""
         content.append(pad_line(f" {msg}"))
@@ -415,7 +492,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up"))
 
         return {
             "type": "screen",
@@ -429,7 +506,24 @@ class ScreenManager:
     def _screen_wrksvc(self, session: Session) -> dict:
         """Work with Services (Docker) - 132 columns for more data."""
         hostname, date_str, time_str = get_system_info()
-        services = self._get_docker_services()
+        all_services = self._get_docker_services()
+
+        # Pagination
+        page_size = self.PAGE_SIZES['wrksvc']
+        offset = session.get_offset('wrksvc')
+        total = len(all_services)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('wrksvc', offset)
+
+        services = all_services[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            pos_indicator = "Bottom" if offset + page_size >= total else "More..."
+        else:
+            pos_indicator = ""
 
         content = [
             pad_line(f" {hostname:<20}                       Work with Services                                    {session.user:>10}", 132),
@@ -442,7 +536,7 @@ class ScreenManager:
         ]
 
         fields = []
-        for i, svc in enumerate(services[:15]):
+        for i, svc in enumerate(services):
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
                 {"type": "text", "text": f"  {svc['name']:<15}  {svc['status']:<9}  {svc['elapsed']:<10}   {svc['image']:<23}  {svc['ports']:<30}"},
@@ -450,8 +544,10 @@ class ScreenManager:
             content.append(row)
             fields.append({"id": f"opt_{i}"})
 
-        while len(content) < 22:
+        while len(content) < 21:
             content.append(pad_line("", 132))
+
+        content.append(pad_line(f"                                                                                                    {pos_indicator:>12}", 132))
 
         msg = session.message if session.message else ""
         content.append(pad_line(f" {msg}", 132))
@@ -462,7 +558,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 120},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line("", 132))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
 
         return {
             "type": "screen",
@@ -503,7 +599,24 @@ class ScreenManager:
     def _screen_dsplog(self, session: Session) -> dict:
         """Display Log - 132 columns for full log messages."""
         hostname, date_str, time_str = get_system_info()
-        logs = self._get_system_logs()
+        all_logs = self._get_system_logs(limit=100)  # Get more logs for scrolling
+
+        # Pagination
+        page_size = self.PAGE_SIZES['dsplog']
+        offset = session.get_offset('dsplog')
+        total = len(all_logs)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('dsplog', offset)
+
+        logs = all_logs[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            pos_indicator = "Bottom" if offset + page_size >= total else "More..."
+        else:
+            pos_indicator = ""
 
         content = [
             pad_line(f" {hostname:<20}                          Display Log                                       {session.user:>10}", 132),
@@ -512,7 +625,7 @@ class ScreenManager:
             [{"type": "text", "text": pad_line(" Time       Severity  Source       Message", 132), "class": "field-reverse"}],
         ]
 
-        for log in logs[:18]:
+        for log in logs:
             css_class = ""
             if log['severity'] == 'ERROR':
                 css_class = "field-error"
@@ -522,11 +635,12 @@ class ScreenManager:
             line = f" {log['time']:<10} {log['severity']:<8}  {log['source']:<10}   {log['message']:<90}"
             content.append([{"type": "text", "text": pad_line(line, 132), "class": css_class}])
 
-        while len(content) < 23:
+        while len(content) < 21:
             content.append(pad_line("", 132))
 
-        content.append(pad_line(" F3=Exit   F5=Refresh   PageUp/PageDown to scroll", 132))
+        content.append(pad_line(f"                                                                                                    {pos_indicator:>12}", 132))
         content.append(pad_line("", 132))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
 
         return {
             "type": "screen",
@@ -888,18 +1002,18 @@ class ScreenManager:
         except Exception:
             pass
 
-    def _get_system_logs(self) -> list[dict]:
+    def _get_system_logs(self, limit: int = 50) -> list[dict]:
         """Get system logs."""
         logs = []
 
         try:
             result = subprocess.run(
-                ['docker', 'logs', '--tail', '50', 'celery-qbatch'],
+                ['docker', 'logs', '--tail', str(limit), 'celery-qbatch'],
                 capture_output=True, text=True, timeout=10
             )
             output = result.stderr or result.stdout
             if output:
-                for line in output.strip().split('\n')[-18:]:
+                for line in output.strip().split('\n'):
                     if line.strip():
                         severity = 'INFO'
                         if 'ERROR' in line.upper():
