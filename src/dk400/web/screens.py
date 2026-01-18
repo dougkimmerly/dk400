@@ -3633,36 +3633,60 @@ class ScreenManager:
 
     def _screen_wrkmsgq(self, session: Session) -> dict:
         """Work with Message Queues screen."""
+        hostname, date_str, time_str = get_system_info()
         queues = list_message_queues()
 
-        lines = [
-            self._center_text("Work with Message Queues", session.display_cols),
-            "",
-            "Type options, press Enter.",
-            "  2=Display   4=Delete   5=Display messages   6=Send message",
-            "",
-            "Opt  Queue      Type     Size  Description",
+        content = [
+            pad_line(f" {hostname:<20}       Work with Message Queues              {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Display   4=Delete   5=Display messages   6=Send message"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Queue       Type      Msgs  Description"), "class": "field-reverse"}],
         ]
 
-        for q in queues:
-            lines.append(f"___  {q['name']:<10} {q['queue_type']:<8} {q.get('message_count', 0):>4}  {q['description'][:30]}")
+        fields = []
+        for i, q in enumerate(queues):
+            msg_count = q.get('total_count', 0)
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {q['name']:<10}  {q['queue_type']:<8}  {msg_count:>4}  {q['description'][:30]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh  F6=Create")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "wrkmsgq",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(queues))],
-            "activeField": 0 if queues else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_wrkmsgq(self, session: Session, fields: dict) -> dict:
         """Handle Work with Message Queues submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
         queues = list_message_queues()
 
         for i, q in enumerate(queues):
@@ -3671,7 +3695,7 @@ class ScreenManager:
                 queue_name = q['name']
                 if opt == '2':
                     session.field_values['selected_msgq'] = queue_name
-                    return self.get_screen(session, 'msgq_detail')
+                    return self.get_screen(session, 'dspmsg')
                 elif opt == '4':
                     success, msg = delete_message_queue(queue_name)
                     session.message = msg
@@ -3688,88 +3712,119 @@ class ScreenManager:
 
     def _screen_dspmsg(self, session: Session) -> dict:
         """Display Messages screen."""
+        hostname, date_str, time_str = get_system_info()
         queue_name = session.field_values.get('selected_msgq', 'QSYSOPR')
-        messages = get_messages(queue_name, limit=20)
+        messages = get_messages(queue_name, limit=12)
 
-        lines = [
-            self._center_text(f"Display Messages - {queue_name}", session.display_cols),
-            "",
-            "Type options, press Enter.",
-            "  4=Remove   5=Reply",
-            "",
-            "Opt  Type      From       Time        Message",
+        content = [
+            pad_line(f" {hostname:<20}       Display Messages - {queue_name:<10}         {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   4=Remove"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Type      From        Time      Message"), "class": "field-reverse"}],
         ]
 
-        for msg in messages:
+        fields = []
+        for i, msg in enumerate(messages):
             sent_at = msg.get('sent_at', '')
             if sent_at:
-                sent_at = str(sent_at)[11:19]  # Just time
-            msg_text = msg.get('msg_text', '')[:35]
-            lines.append(f"___  {msg['msg_type']:<8}  {msg.get('sent_by', ''):<10} {sent_at}  {msg_text}")
+                sent_at = str(sent_at)[11:19]
+            msg_text = msg.get('msg_text', '')[:32]
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {msg['msg_type']:<8}  {msg.get('sent_by', ''):<10}  {sent_at}  {msg_text}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh  F6=Send message")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg_display = session.message if session.message else ""
+        content.append(pad_line(f" {msg_display}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Send message  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "dspmsg",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(messages))],
-            "activeField": 0 if messages else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_dspmsg(self, session: Session, fields: dict) -> dict:
         """Handle Display Messages submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
         queue_name = session.field_values.get('selected_msgq', 'QSYSOPR')
-        messages = get_messages(queue_name, limit=20)
+        messages = get_messages(queue_name, limit=12)
 
         for i, msg in enumerate(messages):
             opt = fields.get(f'opt_{i}', '').strip()
-            if opt:
+            if opt == '4':
                 msg_id = msg['id']
-                if opt == '4':
-                    success, result = delete_message(queue_name, msg_id)
-                    session.message = result
-                    session.message_level = "info" if success else "error"
-                elif opt == '5':
-                    session.field_values['selected_msg_id'] = msg_id
-                    return self.get_screen(session, 'reply_msg')
+                success, result = delete_message(queue_name, msg_id)
+                session.message = result
+                session.message_level = "info" if success else "error"
 
         return self.get_screen(session, 'dspmsg')
 
     def _screen_sndmsg(self, session: Session) -> dict:
         """Send Message screen."""
+        hostname, date_str, time_str = get_system_info()
         queue_name = session.field_values.get('selected_msgq', 'QSYSOPR')
 
-        lines = [
-            self._center_text("Send Message", session.display_cols),
-            "",
-            f"Message queue  . . . :  {queue_name}",
-            "",
-            "Type message text, press Enter.",
-            "",
-            "Message type . . . . :  *INFO____  (*INFO, *INQ, *NOTIFY)",
-            "Message text . . . . :",
-            "________________________________________________________________________",
-            "________________________________________________________________________",
-            "",
-            "F3=Exit  F12=Cancel",
+        content = [
+            pad_line(f" {hostname:<20}           Send Message                       {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Message queue  . . . . :  {queue_name}"),
+            pad_line(""),
+            pad_line(" Type message text, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Message type  . . . . :  "},
+                {"type": "input", "id": "msg_type", "width": 10, "value": "*INFO"},
+                {"type": "text", "text": "  (*INFO, *INQ, *NOTIFY)"},
+            ],
+            pad_line(""),
+            pad_line(" Message text:"),
+            [
+                {"type": "text", "text": " "},
+                {"type": "input", "id": "msg_text", "width": 70},
+            ],
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "sndmsg",
             "cols": 80,
             "content": content,
-            "fields": [
-                {"id": "msg_type"},
-                {"id": "msg_text"},
-            ],
-            "activeField": 0,
+            "fields": [{"id": "msg_type"}, {"id": "msg_text"}],
+            "activeField": 1,
         }
 
     def _submit_sndmsg(self, session: Session, fields: dict) -> dict:
@@ -3798,43 +3853,62 @@ class ScreenManager:
 
     def _screen_wrkdtaara(self, session: Session) -> dict:
         """Work with Data Areas screen."""
-        library = session.field_values.get('dtaara_library', '*ALL')
-        dtaaras = list_data_areas(library if library != '*ALL' else None)
+        hostname, date_str, time_str = get_system_info()
+        dtaaras = list_data_areas()
 
-        lines = [
-            self._center_text("Work with Data Areas", session.display_cols),
-            "",
-            f"Library  . . . . . :  {library}",
-            "",
-            "Type options, press Enter.",
-            "  2=Display   4=Delete   5=Change",
-            "",
-            "Opt  Data Area   Library    Type   Length  Description",
+        content = [
+            pad_line(f" {hostname:<20}       Work with Data Areas                   {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Display   4=Delete   5=Change"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Data Area   Library    Type    Len  Description"), "class": "field-reverse"}],
         ]
 
-        for d in dtaaras:
-            lines.append(f"___  {d['name']:<10}  {d['library']:<10} {d['type']:<6} {d['length']:>6}  {d['description'][:25]}")
+        fields = []
+        for i, d in enumerate(dtaaras[:12]):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {d['name']:<10}  {d['library']:<10} {d['type']:<6} {d['length']:>5}  {d['description'][:20]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh  F6=Create")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "wrkdtaara",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(8, 8 + len(dtaaras))],
-            "activeField": 0 if dtaaras else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_wrkdtaara(self, session: Session, fields: dict) -> dict:
         """Handle Work with Data Areas submission."""
-        library = session.field_values.get('dtaara_library', '*ALL')
-        dtaaras = list_data_areas(library if library != '*ALL' else None)
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
 
-        for i, d in enumerate(dtaaras):
+        dtaaras = list_data_areas()
+
+        for i, d in enumerate(dtaaras[:12]):
             opt = fields.get(f'opt_{i}', '').strip()
             if opt:
                 if opt == '2':
@@ -3855,6 +3929,7 @@ class ScreenManager:
 
     def _screen_dspdtaara(self, session: Session) -> dict:
         """Display Data Area screen."""
+        hostname, date_str, time_str = get_system_info()
         name = session.field_values.get('selected_dtaara', '')
         library = session.field_values.get('selected_dtaara_lib', '*LIBL')
         dtaara = get_data_area(name, library)
@@ -3864,29 +3939,34 @@ class ScreenManager:
             session.message_level = "error"
             return self.get_screen(session, 'wrkdtaara')
 
-        lines = [
-            self._center_text("Display Data Area", session.display_cols),
-            "",
-            f"Data area  . . . . :  {dtaara['name']}",
-            f"Library  . . . . . :  {dtaara['library']}",
-            f"Type . . . . . . . :  {dtaara['type']}",
-            f"Length . . . . . . :  {dtaara['length']}",
-            f"Description  . . . :  {dtaara['description']}",
-            "",
-            "Value:",
-            f"  {dtaara['value'][:70]}",
-            "",
-            f"Locked by  . . . . :  {dtaara.get('locked_by') or '*NONE'}",
-            f"Created by . . . . :  {dtaara.get('created_by', '')}",
-            f"Created  . . . . . :  {dtaara.get('created_at', '')}",
-            f"Updated  . . . . . :  {dtaara.get('updated_at', '')}",
-            "",
-            "F3=Exit  F5=Refresh  F12=Cancel",
+        content = [
+            pad_line(f" {hostname:<20}       Display Data Area                      {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Data area  . . . . :  {dtaara['name']}"),
+            pad_line(f" Library  . . . . . :  {dtaara['library']}"),
+            pad_line(f" Type . . . . . . . :  {dtaara['type']}"),
+            pad_line(f" Length . . . . . . :  {dtaara['length']}"),
+            pad_line(f" Description  . . . :  {dtaara['description']}"),
+            pad_line(""),
+            pad_line(" Value:"),
+            pad_line(f"   {str(dtaara.get('value', ''))[:65]}"),
+            pad_line(""),
+            pad_line(f" Locked by  . . . . :  {dtaara.get('locked_by') or '*NONE'}"),
+            pad_line(f" Created by . . . . :  {dtaara.get('created_by', '')}"),
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "dspdtaara",
             "cols": 80,
             "content": content,
@@ -3896,35 +3976,56 @@ class ScreenManager:
 
     def _screen_crtdtaara(self, session: Session) -> dict:
         """Create Data Area screen."""
-        lines = [
-            self._center_text("Create Data Area (CRTDTAARA)", session.display_cols),
-            "",
-            "Type choices, press Enter.",
-            "",
-            "Data area  . . . . . . . :  __________",
-            "Library  . . . . . . . . :  *LIBL_____  *LIBL, name",
-            "Type . . . . . . . . . . :  *CHAR_____  *CHAR, *DEC, *LGL",
-            "Length . . . . . . . . . :  2000______",
-            "Initial value  . . . . . :  _______________________________________",
-            "Description  . . . . . . :  _______________________________________",
-            "",
-            "F3=Exit  F12=Cancel",
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}    Create Data Area (CRTDTAARA)              {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Data area  . . . . . . :  "},
+                {"type": "input", "id": "name", "width": 10},
+            ],
+            [
+                {"type": "text", "text": " Library  . . . . . . . :  "},
+                {"type": "input", "id": "library", "width": 10, "value": "*LIBL"},
+            ],
+            [
+                {"type": "text", "text": " Type . . . . . . . . . :  "},
+                {"type": "input", "id": "type", "width": 10, "value": "*CHAR"},
+                {"type": "text", "text": "  *CHAR, *DEC, *LGL"},
+            ],
+            [
+                {"type": "text", "text": " Length . . . . . . . . :  "},
+                {"type": "input", "id": "length", "width": 10, "value": "2000"},
+            ],
+            [
+                {"type": "text", "text": " Initial value  . . . . :  "},
+                {"type": "input", "id": "value", "width": 40},
+            ],
+            [
+                {"type": "text", "text": " Description  . . . . . :  "},
+                {"type": "input", "id": "description", "width": 40},
+            ],
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "crtdtaara",
             "cols": 80,
             "content": content,
-            "fields": [
-                {"id": "name"},
-                {"id": "library"},
-                {"id": "type"},
-                {"id": "length"},
-                {"id": "value"},
-                {"id": "description"},
-            ],
+            "fields": [{"id": "name"}, {"id": "library"}, {"id": "type"}, {"id": "length"}, {"id": "value"}, {"id": "description"}],
             "activeField": 0,
         }
 
@@ -3933,7 +4034,10 @@ class ScreenManager:
         name = fields.get('name', '').strip().upper()
         library = fields.get('library', '*LIBL').strip().upper() or '*LIBL'
         dtaara_type = fields.get('type', '*CHAR').strip().upper() or '*CHAR'
-        length = int(fields.get('length', '2000') or '2000')
+        try:
+            length = int(fields.get('length', '2000') or '2000')
+        except ValueError:
+            length = 2000
         value = fields.get('value', '').strip()
         description = fields.get('description', '').strip()
 
@@ -3961,6 +4065,7 @@ class ScreenManager:
 
     def _screen_chgdtaara(self, session: Session) -> dict:
         """Change Data Area screen."""
+        hostname, date_str, time_str = get_system_info()
         name = session.field_values.get('selected_dtaara', '')
         library = session.field_values.get('selected_dtaara_lib', '*LIBL')
         dtaara = get_data_area(name, library)
@@ -3970,26 +4075,36 @@ class ScreenManager:
             session.message_level = "error"
             return self.get_screen(session, 'wrkdtaara')
 
-        current_value = dtaara.get('value', '')
+        current_value = str(dtaara.get('value', ''))
 
-        lines = [
-            self._center_text("Change Data Area (CHGDTAARA)", session.display_cols),
-            "",
-            f"Data area  . . . . :  {name}",
-            f"Library  . . . . . :  {library}",
-            f"Type . . . . . . . :  {dtaara['type']}",
-            f"Length . . . . . . :  {dtaara['length']}",
-            "",
-            "Type new value, press Enter.",
-            "",
-            f"New value  . . . . :  {current_value[:40]}{'_' * max(0, 40 - len(current_value))}",
-            "",
-            "F3=Exit  F12=Cancel",
+        content = [
+            pad_line(f" {hostname:<20}   Change Data Area (CHGDTAARA)               {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Data area  . . . . :  {name}"),
+            pad_line(f" Library  . . . . . :  {library}"),
+            pad_line(f" Type . . . . . . . :  {dtaara['type']}"),
+            pad_line(f" Length . . . . . . :  {dtaara['length']}"),
+            pad_line(""),
+            pad_line(" Type new value, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " New value  . . . . :  "},
+                {"type": "input", "id": "new_value", "width": 50, "value": current_value[:50]},
+            ],
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "chgdtaara",
             "cols": 80,
             "content": content,
@@ -4018,35 +4133,53 @@ class ScreenManager:
 
     def _screen_wrkjobd(self, session: Session) -> dict:
         """Work with Job Descriptions screen."""
+        hostname, date_str, time_str = get_system_info()
         library = session.field_values.get('jobd_library', '*ALL')
         jobds = list_job_descriptions(library if library != '*ALL' else None)
 
-        lines = [
-            self._center_text("Work with Job Descriptions", session.display_cols),
-            "",
-            f"Library  . . . . . :  {library}",
-            "",
-            "Type options, press Enter.",
-            "  2=Display   4=Delete   5=Change",
-            "",
-            "Opt  Job Desc    Library    Job Queue   Priority  Description",
+        content = [
+            pad_line(f" {hostname:<20}       Work with Job Descriptions             {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(f" Library  . . . . . :  {library}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Display   4=Delete   5=Change"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Job Desc    Library    Job Queue   Priority  Description"), "class": "field-reverse"}],
         ]
 
-        for j in jobds:
-            lines.append(f"___  {j['name']:<10}  {j['library']:<10} {j['job_queue']:<10} {j['job_priority']:>3}       {j['description'][:20]}")
+        fields = []
+        for i, j in enumerate(jobds):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {j['name']:<10}  {j['library']:<10} {j['job_queue']:<10} {j['job_priority']:>3}       {j['description'][:20]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh  F6=Create")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "wrkjobd",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(8, 8 + len(jobds))],
-            "activeField": 0 if jobds else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_wrkjobd(self, session: Session, fields: dict) -> dict:
@@ -4075,6 +4208,7 @@ class ScreenManager:
 
     def _screen_dspjobd(self, session: Session) -> dict:
         """Display Job Description screen."""
+        hostname, date_str, time_str = get_system_info()
         name = session.field_values.get('selected_jobd', '')
         library = session.field_values.get('selected_jobd_lib', '*LIBL')
         jobd = get_job_description(name, library)
@@ -4084,59 +4218,101 @@ class ScreenManager:
             session.message_level = "error"
             return self.get_screen(session, 'wrkjobd')
 
-        lines = [
-            self._center_text("Display Job Description", session.display_cols),
-            "",
-            f"Job description  . :  {jobd['name']}",
-            f"Library  . . . . . :  {jobd['library']}",
-            f"Description  . . . :  {jobd['description']}",
-            "",
-            "Job attributes:",
-            f"  Job queue  . . . :  {jobd['job_queue']}",
-            f"  Job priority . . :  {jobd['job_priority']}",
-            f"  Output queue . . :  {jobd['output_queue']}",
-            f"  Output priority  :  {jobd.get('output_priority', 5)}",
-            f"  Print device . . :  {jobd.get('print_device', '*USRPRF')}",
-            "",
-            f"  Log level  . . . :  {jobd.get('log_level', 4)}",
-            f"  Log severity . . :  {jobd.get('log_severity', 0)}",
-            f"  Log text . . . . :  {jobd.get('log_text', '*MSG')}",
-            "",
-            "F3=Exit  F12=Cancel",
+        content = [
+            pad_line(f" {hostname:<20}       Display Job Description                 {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Job description  . :  {jobd['name']}"),
+            pad_line(f" Library  . . . . . :  {jobd['library']}"),
+            pad_line(f" Description  . . . :  {jobd['description']}"),
+            pad_line(""),
+            pad_line(" Job attributes:"),
+            pad_line(f"   Job queue  . . . :  {jobd['job_queue']}"),
+            pad_line(f"   Job priority . . :  {jobd['job_priority']}"),
+            pad_line(f"   Output queue . . :  {jobd['output_queue']}"),
+            pad_line(f"   Output priority  :  {jobd.get('output_priority', 5)}"),
+            pad_line(f"   Print device . . :  {jobd.get('print_device', '*USRPRF')}"),
+            pad_line(""),
+            pad_line(f"   Log level  . . . :  {jobd.get('log_level', 4)}"),
+            pad_line(f"   Log severity . . :  {jobd.get('log_severity', 0)}"),
+            pad_line(f"   Log text . . . . :  {jobd.get('log_text', '*MSG')}"),
+            pad_line(""),
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "dspjobd",
             "cols": 80,
             "content": content,
-            "fields": [],
-            "activeField": None,
+            "fields": [{"id": "cmd"}],
+            "activeField": 0,
         }
 
     def _screen_crtjobd(self, session: Session) -> dict:
         """Create Job Description screen."""
-        lines = [
-            self._center_text("Create Job Description (CRTJOBD)", session.display_cols),
-            "",
-            "Type choices, press Enter.",
-            "",
-            "Job description  . . . :  __________",
-            "Library  . . . . . . . :  *LIBL_____  *LIBL, name",
-            "Description  . . . . . :  _______________________________________",
-            "",
-            "Job attributes:",
-            "  Job queue  . . . . . :  QBATCH____",
-            "  Job priority . . . . :  5_        1-9",
-            "  Output queue . . . . :  *USRPRF___",
-            "",
-            "F3=Exit  F12=Cancel",
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}       Create Job Description (CRTJOBD)        {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Job description  . . . :  "},
+                {"type": "input", "id": "name", "width": 10, "class": "field-input"},
+            ],
+            [
+                {"type": "text", "text": " Library  . . . . . . . :  "},
+                {"type": "input", "id": "library", "width": 10, "class": "field-input", "value": "*LIBL"},
+                {"type": "text", "text": "  *LIBL, name"},
+            ],
+            [
+                {"type": "text", "text": " Description  . . . . . :  "},
+                {"type": "input", "id": "description", "width": 40, "class": "field-input"},
+            ],
+            pad_line(""),
+            pad_line(" Job attributes:"),
+            [
+                {"type": "text", "text": "   Job queue  . . . . . :  "},
+                {"type": "input", "id": "job_queue", "width": 10, "class": "field-input", "value": "QBATCH"},
+            ],
+            [
+                {"type": "text", "text": "   Job priority . . . . :  "},
+                {"type": "input", "id": "job_priority", "width": 2, "class": "field-input", "value": "5"},
+                {"type": "text", "text": "        1-9"},
+            ],
+            [
+                {"type": "text", "text": "   Output queue . . . . :  "},
+                {"type": "input", "id": "output_queue", "width": 10, "class": "field-input", "value": "*USRPRF"},
+            ],
+            pad_line(""),
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "crtjobd",
             "cols": 80,
             "content": content,
@@ -4147,6 +4323,7 @@ class ScreenManager:
                 {"id": "job_queue"},
                 {"id": "job_priority"},
                 {"id": "output_queue"},
+                {"id": "cmd"},
             ],
             "activeField": 0,
         }
@@ -4188,32 +4365,51 @@ class ScreenManager:
 
     def _screen_wrkoutq(self, session: Session) -> dict:
         """Work with Output Queues screen."""
+        hostname, date_str, time_str = get_system_info()
         outqs = list_output_queues()
 
-        lines = [
-            self._center_text("Work with Output Queues", session.display_cols),
-            "",
-            "Type options, press Enter.",
-            "  2=Display   4=Delete   5=Work with spooled files   8=Hold   9=Release",
-            "",
-            "Opt  Output Queue  Library    Status   Files  Description",
+        content = [
+            pad_line(f" {hostname:<20}       Work with Output Queues                 {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Display   4=Delete   5=Work with spooled files   8=Hold   9=Release"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Output Queue  Library    Status   Files  Description"), "class": "field-reverse"}],
         ]
 
-        for q in outqs:
-            lines.append(f"___  {q['name']:<12}  {q['library']:<10} {q['status']:<7} {q.get('file_count', 0):>5}  {q['description'][:20]}")
+        fields = []
+        for i, q in enumerate(outqs):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {q['name']:<12}  {q['library']:<10} {q['status']:<7} {q.get('file_count', 0):>5}  {q['description'][:20]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh  F6=Create")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "wrkoutq",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(outqs))],
-            "activeField": 0 if outqs else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_wrkoutq(self, session: Session, fields: dict) -> dict:
@@ -4243,6 +4439,7 @@ class ScreenManager:
 
     def _screen_wrksplf(self, session: Session) -> dict:
         """Work with Spooled Files screen."""
+        hostname, date_str, time_str = get_system_info()
         user = session.field_values.get('splf_user', '*CURRENT')
         if user == '*CURRENT':
             user = session.user
@@ -4250,32 +4447,49 @@ class ScreenManager:
         outq = session.field_values.get('selected_outq')
         splfs = list_spooled_files(user=user, output_queue=outq)
 
-        lines = [
-            self._center_text("Work with Spooled Files", session.display_cols),
-            "",
-            f"User . . . . . . . :  {user}",
-            "",
-            "Type options, press Enter.",
-            "  2=Display   4=Delete   8=Hold   9=Release",
-            "",
-            "Opt  File       Nbr  Job                Status   Pages  Queue",
+        content = [
+            pad_line(f" {hostname:<20}       Work with Spooled Files                 {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(f" User . . . . . . . :  {user}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Display   4=Delete   8=Hold   9=Release"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  File       Nbr  Job                Status   Pages  Queue"), "class": "field-reverse"}],
         ]
 
-        for s in splfs:
-            lines.append(f"___  {s['name']:<10} {s['file_number']:>3}  {s['job_name'][:18]:<18} {s['status']:<7} {s.get('pages', 0):>5}  {s['output_queue']}")
+        fields = []
+        for i, s in enumerate(splfs):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {s['name']:<10} {s['file_number']:>3}  {s['job_name'][:18]:<18} {s['status']:<7} {s.get('pages', 0):>5}  {s['output_queue']}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "wrksplf",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(8, 8 + len(splfs))],
-            "activeField": 0 if splfs else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_wrksplf(self, session: Session, fields: dict) -> dict:
@@ -4311,6 +4525,7 @@ class ScreenManager:
 
     def _screen_dspsplf(self, session: Session) -> dict:
         """Display Spooled File screen."""
+        hostname, date_str, time_str = get_system_info()
         splf_id = session.field_values.get('selected_splf')
         splf = get_spooled_file(splf_id) if splf_id else None
 
@@ -4319,33 +4534,40 @@ class ScreenManager:
             session.message_level = "error"
             return self.get_screen(session, 'wrksplf')
 
-        content_lines = (splf.get('content') or '').split('\n')[:20]
+        content_lines = (splf.get('content') or '').split('\n')[:12]
 
-        lines = [
-            self._center_text(f"Display Spooled File - {splf['name']}", session.display_cols),
-            "",
-            f"Job  . . . . . . . :  {splf['job_name']}",
-            f"File number  . . . :  {splf['file_number']}",
-            f"Status . . . . . . :  {splf['status']}",
-            "",
-            "-" * 72,
+        content = [
+            pad_line(f" {hostname:<20}       Display Spooled File                     {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(f" File  . . . . . . :  {splf['name']}"),
+            pad_line(f" Job  . . . . . . . :  {splf['job_name']}"),
+            pad_line(f" File number  . . . :  {splf['file_number']}"),
+            pad_line(f" Status . . . . . . :  {splf['status']}"),
+            pad_line(""),
+            pad_line(" " + "-" * 72),
         ]
 
         for line in content_lines:
-            lines.append(line[:72])
+            content.append(pad_line(f" {line[:72]}"))
 
-        lines.append("-" * 72)
-        lines.append("")
-        lines.append("F3=Exit  F12=Cancel")
+        content.append(pad_line(" " + "-" * 72))
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "dspsplf",
             "cols": 80,
             "content": content,
-            "fields": [],
-            "activeField": None,
+            "fields": [{"id": "cmd"}],
+            "activeField": 0,
         }
 
     # ========================================
@@ -4354,34 +4576,53 @@ class ScreenManager:
 
     def _screen_wrkjobscde(self, session: Session) -> dict:
         """Work with Job Schedule Entries screen."""
+        hostname, date_str, time_str = get_system_info()
         entries = list_job_schedule_entries()
 
-        lines = [
-            self._center_text("Work with Job Schedule Entries", session.display_cols),
-            "",
-            "Type options, press Enter.",
-            "  2=Display   4=Remove   8=Hold   9=Release",
-            "",
-            "Opt  Entry Name         Frequency  Time     Status     Next Run",
+        content = [
+            pad_line(f" {hostname:<20}       Work with Job Schedule Entries           {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Display   4=Remove   8=Hold   9=Release"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Entry Name         Frequency  Time     Status     Next Run"), "class": "field-reverse"}],
         ]
 
-        for e in entries:
+        fields = []
+        for i, e in enumerate(entries):
             sched_time = str(e.get('schedule_time', ''))[:5] if e.get('schedule_time') else ''
             next_run = str(e.get('next_run_time', ''))[:16] if e.get('next_run_time') else ''
-            lines.append(f"___  {e['name']:<18} {e['frequency']:<10} {sched_time:<8} {e['status']:<10} {next_run}")
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {e['name']:<18} {e['frequency']:<10} {sched_time:<8} {e['status']:<10} {next_run}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh  F6=Add")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Add  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "wrkjobscde",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(entries))],
-            "activeField": 0 if entries else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_wrkjobscde(self, session: Session, fields: dict) -> dict:
@@ -4412,6 +4653,7 @@ class ScreenManager:
 
     def _screen_dspjobscde(self, session: Session) -> dict:
         """Display Job Schedule Entry screen."""
+        hostname, date_str, time_str = get_system_info()
         name = session.field_values.get('selected_jobscde', '')
         entry = get_job_schedule_entry(name)
 
@@ -4420,60 +4662,102 @@ class ScreenManager:
             session.message_level = "error"
             return self.get_screen(session, 'wrkjobscde')
 
-        lines = [
-            self._center_text("Display Job Schedule Entry", session.display_cols),
-            "",
-            f"Entry name . . . . :  {entry['name']}",
-            f"Description  . . . :  {entry['description']}",
-            f"Status . . . . . . :  {entry['status']}",
-            "",
-            "Schedule:",
-            f"  Frequency  . . . :  {entry['frequency']}",
-            f"  Time . . . . . . :  {entry.get('schedule_time', '')}",
-            f"  Days . . . . . . :  {entry.get('schedule_days', '*ALL')}",
-            "",
-            "Command:",
-            f"  {entry['command'][:60]}",
-            "",
-            f"Last run . . . . . :  {entry.get('last_run_time', '*NONE')}",
-            f"Next run . . . . . :  {entry.get('next_run_time', '')}",
-            "",
-            "F3=Exit  F12=Cancel",
+        content = [
+            pad_line(f" {hostname:<20}       Display Job Schedule Entry               {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Entry name . . . . :  {entry['name']}"),
+            pad_line(f" Description  . . . :  {entry['description']}"),
+            pad_line(f" Status . . . . . . :  {entry['status']}"),
+            pad_line(""),
+            pad_line(" Schedule:"),
+            pad_line(f"   Frequency  . . . :  {entry['frequency']}"),
+            pad_line(f"   Time . . . . . . :  {entry.get('schedule_time', '')}"),
+            pad_line(f"   Days . . . . . . :  {entry.get('schedule_days', '*ALL')}"),
+            pad_line(""),
+            pad_line(" Command:"),
+            pad_line(f"   {entry['command'][:60]}"),
+            pad_line(""),
+            pad_line(f" Last run . . . . . :  {entry.get('last_run_time', '*NONE')}"),
+            pad_line(f" Next run . . . . . :  {entry.get('next_run_time', '')}"),
+            pad_line(""),
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "dspjobscde",
             "cols": 80,
             "content": content,
-            "fields": [],
-            "activeField": None,
+            "fields": [{"id": "cmd"}],
+            "activeField": 0,
         }
 
     def _screen_addjobscde(self, session: Session) -> dict:
         """Add Job Schedule Entry screen."""
-        lines = [
-            self._center_text("Add Job Schedule Entry (ADDJOBSCDE)", session.display_cols),
-            "",
-            "Type choices, press Enter.",
-            "",
-            "Entry name . . . . . . :  __________________",
-            "Description  . . . . . :  _______________________________________",
-            "",
-            "Command  . . . . . . . :  _______________________________________",
-            "",
-            "Schedule:",
-            "  Frequency  . . . . . :  *DAILY____  *ONCE, *DAILY, *WEEKLY, *MONTHLY",
-            "  Time (HH:MM) . . . . :  _____",
-            "  Days . . . . . . . . :  *ALL______  *ALL, *MON, *TUE, etc.",
-            "",
-            "F3=Exit  F12=Cancel",
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}       Add Job Schedule Entry (ADDJOBSCDE)      {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Entry name . . . . . . :  "},
+                {"type": "input", "id": "name", "width": 18, "class": "field-input"},
+            ],
+            [
+                {"type": "text", "text": " Description  . . . . . :  "},
+                {"type": "input", "id": "description", "width": 40, "class": "field-input"},
+            ],
+            pad_line(""),
+            [
+                {"type": "text", "text": " Command  . . . . . . . :  "},
+                {"type": "input", "id": "command", "width": 40, "class": "field-input"},
+            ],
+            pad_line(""),
+            pad_line(" Schedule:"),
+            [
+                {"type": "text", "text": "   Frequency  . . . . . :  "},
+                {"type": "input", "id": "frequency", "width": 10, "class": "field-input", "value": "*DAILY"},
+                {"type": "text", "text": "  *ONCE, *DAILY, *WEEKLY, *MONTHLY"},
+            ],
+            [
+                {"type": "text", "text": "   Time (HH:MM) . . . . :  "},
+                {"type": "input", "id": "time", "width": 5, "class": "field-input"},
+            ],
+            [
+                {"type": "text", "text": "   Days . . . . . . . . :  "},
+                {"type": "input", "id": "days", "width": 10, "class": "field-input", "value": "*ALL"},
+                {"type": "text", "text": "  *ALL, *MON, *TUE, etc."},
+            ],
+            pad_line(""),
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "addjobscde",
             "cols": 80,
             "content": content,
@@ -4484,6 +4768,7 @@ class ScreenManager:
                 {"id": "frequency"},
                 {"id": "time"},
                 {"id": "days"},
+                {"id": "cmd"},
             ],
             "activeField": 0,
         }
@@ -4530,32 +4815,51 @@ class ScreenManager:
 
     def _screen_wrkautl(self, session: Session) -> dict:
         """Work with Authorization Lists screen."""
+        hostname, date_str, time_str = get_system_info()
         autls = list_authorization_lists()
 
-        lines = [
-            self._center_text("Work with Authorization Lists", session.display_cols),
-            "",
-            "Type options, press Enter.",
-            "  2=Display   4=Delete   5=Work with entries",
-            "",
-            "Opt  Auth List   Entries  Description",
+        content = [
+            pad_line(f" {hostname:<20}       Work with Authorization Lists            {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Display   4=Delete   5=Work with entries"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Auth List   Entries  Description"), "class": "field-reverse"}],
         ]
 
-        for a in autls:
-            lines.append(f"___  {a['name']:<10}  {a.get('entry_count', 0):>5}    {a['description'][:35]}")
+        fields = []
+        for i, a in enumerate(autls):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {a['name']:<10}  {a.get('entry_count', 0):>5}    {a['description'][:35]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh  F6=Create")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "wrkautl",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(autls))],
-            "activeField": 0 if autls else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_wrkautl(self, session: Session, fields: dict) -> dict:
@@ -4581,62 +4885,91 @@ class ScreenManager:
 
     def _screen_dspautl(self, session: Session) -> dict:
         """Display Authorization List screen."""
+        hostname, date_str, time_str = get_system_info()
         name = session.field_values.get('selected_autl', '')
         entries = get_authorization_list_entries(name)
         objects = get_authorization_list_objects(name)
 
-        lines = [
-            self._center_text(f"Display Authorization List - {name}", session.display_cols),
-            "",
-            "User Entries:",
-            "  User        Authority",
+        content = [
+            pad_line(f" {hostname:<20}       Display Authorization List               {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(f" Authorization list . :  {name}"),
+            pad_line(""),
+            pad_line(" User Entries:"),
+            pad_line("   User        Authority"),
         ]
 
-        for e in entries:
-            lines.append(f"  {e['username']:<10}  {e['authority']}")
+        for e in entries[:5]:
+            content.append(pad_line(f"   {e['username']:<10}  {e['authority']}"))
 
-        lines.append("")
-        lines.append("Secured Objects:")
-        lines.append("  Object       Type       Library")
+        content.append(pad_line(""))
+        content.append(pad_line(" Secured Objects:"))
+        content.append(pad_line("   Object       Type       Library"))
 
-        for o in objects:
-            lines.append(f"  {o['object_name']:<10}  {o['object_type']:<10} {o['object_library']}")
+        for o in objects[:5]:
+            content.append(pad_line(f"   {o['object_name']:<10}  {o['object_type']:<10} {o['object_library']}"))
 
-        lines.append("")
-        lines.append("F3=Exit  F12=Cancel")
+        while len(content) < 21:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "dspautl",
             "cols": 80,
             "content": content,
-            "fields": [],
-            "activeField": None,
+            "fields": [{"id": "cmd"}],
+            "activeField": 0,
         }
 
     def _screen_crtautl(self, session: Session) -> dict:
         """Create Authorization List screen."""
-        lines = [
-            self._center_text("Create Authorization List (CRTAUTL)", session.display_cols),
-            "",
-            "Type choices, press Enter.",
-            "",
-            "Authorization list . . :  __________",
-            "Description  . . . . . :  _______________________________________",
-            "",
-            "F3=Exit  F12=Cancel",
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}       Create Authorization List (CRTAUTL)     {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Authorization list . . :  "},
+                {"type": "input", "id": "name", "width": 10, "class": "field-input"},
+            ],
+            [
+                {"type": "text", "text": " Description  . . . . . :  "},
+                {"type": "input", "id": "description", "width": 40, "class": "field-input"},
+            ],
+            pad_line(""),
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "crtautl",
             "cols": 80,
             "content": content,
             "fields": [
                 {"id": "name"},
                 {"id": "description"},
+                {"id": "cmd"},
             ],
             "activeField": 0,
         }
@@ -4662,33 +4995,53 @@ class ScreenManager:
 
     def _screen_wrkautlent(self, session: Session) -> dict:
         """Work with Authorization List Entries screen."""
+        hostname, date_str, time_str = get_system_info()
         autl_name = session.field_values.get('selected_autl', '')
         entries = get_authorization_list_entries(autl_name)
 
-        lines = [
-            self._center_text(f"Work with Auth List Entries - {autl_name}", session.display_cols),
-            "",
-            "Type options, press Enter.",
-            "  4=Remove   5=Change authority",
-            "",
-            "Opt  User        Authority",
+        content = [
+            pad_line(f" {hostname:<20}       Work with Auth List Entries              {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(f" Authorization list . :  {autl_name}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   4=Remove   5=Change authority"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  User        Authority"), "class": "field-reverse"}],
         ]
 
-        for e in entries:
-            lines.append(f"___  {e['username']:<10}  {e['authority']}")
+        fields = []
+        for i, e in enumerate(entries):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {e['username']:<10}  {e['authority']}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh  F6=Add entry")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Add entry  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "wrkautlent",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(entries))],
-            "activeField": 0 if entries else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_wrkautlent(self, session: Session, fields: dict) -> dict:
@@ -4712,32 +5065,51 @@ class ScreenManager:
 
     def _screen_wrksbsd(self, session: Session) -> dict:
         """Work with Subsystem Descriptions screen."""
+        hostname, date_str, time_str = get_system_info()
         sbsds = list_subsystem_descriptions()
 
-        lines = [
-            self._center_text("Work with Subsystem Descriptions", session.display_cols),
-            "",
-            "Type options, press Enter.",
-            "  2=Display   4=Delete   8=Start   9=End",
-            "",
-            "Opt  Subsystem   Status      Workers  Queue           Description",
+        content = [
+            pad_line(f" {hostname:<20}       Work with Subsystem Descriptions         {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Display   4=Delete   8=Start   9=End"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Subsystem   Status      Workers  Queue           Description"), "class": "field-reverse"}],
         ]
 
-        for s in sbsds:
-            lines.append(f"___  {s['name']:<10} {s['status']:<10} {s.get('worker_concurrency', 0):>5}    {s.get('celery_queue', ''):<15} {s['description'][:15]}")
+        fields = []
+        for i, s in enumerate(sbsds):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {s['name']:<10} {s['status']:<10} {s.get('worker_concurrency', 0):>5}    {s.get('celery_queue', ''):<15} {s['description'][:15]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
 
-        lines.append("")
-        lines.append("                                                                  Bottom")
-        lines.append("F3=Exit  F5=Refresh  F6=Create")
+        while len(content) < 19:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append(pad_line("                                                                  Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "wrksbsd",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "opt", "row": i} for i in range(6, 6 + len(sbsds))],
-            "activeField": 0 if sbsds else None,
+            "fields": fields,
+            "activeField": 0,
         }
 
     def _submit_wrksbsd(self, session: Session, fields: dict) -> dict:
@@ -4768,6 +5140,7 @@ class ScreenManager:
 
     def _screen_dspsbsd(self, session: Session) -> dict:
         """Display Subsystem Description screen."""
+        hostname, date_str, time_str = get_system_info()
         name = session.field_values.get('selected_sbsd', '')
         sbsd = get_subsystem_description(name)
 
@@ -4778,55 +5151,78 @@ class ScreenManager:
 
         job_queues = get_subsystem_job_queues(name)
 
-        lines = [
-            self._center_text(f"Display Subsystem Description - {name}", session.display_cols),
-            "",
-            f"Subsystem  . . . . :  {sbsd['name']}",
-            f"Description  . . . :  {sbsd['description']}",
-            f"Status . . . . . . :  {sbsd['status']}",
-            "",
-            "Celery settings:",
-            f"  Queue  . . . . . :  {sbsd.get('celery_queue', '*DEFAULT')}",
-            f"  Concurrency  . . :  {sbsd.get('worker_concurrency', 4)}",
-            "",
-            "Job Queues:",
+        content = [
+            pad_line(f" {hostname:<20}       Display Subsystem Description             {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Subsystem  . . . . :  {sbsd['name']}"),
+            pad_line(f" Description  . . . :  {sbsd['description']}"),
+            pad_line(f" Status . . . . . . :  {sbsd['status']}"),
+            pad_line(""),
+            pad_line(" Celery settings:"),
+            pad_line(f"   Queue  . . . . . :  {sbsd.get('celery_queue', '*DEFAULT')}"),
+            pad_line(f"   Concurrency  . . :  {sbsd.get('worker_concurrency', 4)}"),
+            pad_line(""),
+            pad_line(" Job Queues:"),
         ]
 
-        for jq in job_queues:
-            lines.append(f"  {jq['job_queue']:<10}  Priority: {jq['sequence']}")
+        for jq in job_queues[:5]:
+            content.append(pad_line(f"   {jq['job_queue']:<10}  Priority: {jq['sequence']}"))
 
-        lines.append("")
-        lines.append("F3=Exit  F12=Cancel")
+        while len(content) < 21:
+            content.append(pad_line(""))
 
-        content = self._build_content(lines, session)
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "dspsbsd",
             "cols": 80,
             "content": content,
-            "fields": [],
-            "activeField": None,
+            "fields": [{"id": "cmd"}],
+            "activeField": 0,
         }
 
     def _screen_strsbs(self, session: Session) -> dict:
         """Start Subsystem screen."""
-        lines = [
-            self._center_text("Start Subsystem (STRSBS)", session.display_cols),
-            "",
-            "Type choices, press Enter.",
-            "",
-            "Subsystem description  :  __________",
-            "",
-            "F3=Exit  F12=Cancel",
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}       Start Subsystem (STRSBS)                  {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Subsystem description  :  "},
+                {"type": "input", "id": "name", "width": 10, "class": "field-input"},
+            ],
+            pad_line(""),
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "strsbs",
             "cols": 80,
             "content": content,
-            "fields": [{"id": "name"}],
+            "fields": [{"id": "name"}, {"id": "cmd"}],
             "activeField": 0,
         }
 
@@ -4848,26 +5244,48 @@ class ScreenManager:
 
     def _screen_endsbs(self, session: Session) -> dict:
         """End Subsystem screen."""
-        lines = [
-            self._center_text("End Subsystem (ENDSBS)", session.display_cols),
-            "",
-            "Type choices, press Enter.",
-            "",
-            "Subsystem description  :  __________",
-            "How to end . . . . . . :  *CNTRLD___  *CNTRLD, *IMMED",
-            "",
-            "F3=Exit  F12=Cancel",
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}       End Subsystem (ENDSBS)                    {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Subsystem description  :  "},
+                {"type": "input", "id": "name", "width": 10, "class": "field-input"},
+            ],
+            [
+                {"type": "text", "text": " How to end . . . . . . :  "},
+                {"type": "input", "id": "option", "width": 10, "class": "field-input", "value": "*CNTRLD"},
+                {"type": "text", "text": "  *CNTRLD, *IMMED"},
+            ],
+            pad_line(""),
         ]
 
-        content = self._build_content(lines, session)
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
 
         return {
+            "type": "screen",
             "screen": "endsbs",
             "cols": 80,
             "content": content,
             "fields": [
                 {"id": "name"},
                 {"id": "option"},
+                {"id": "cmd"},
             ],
             "activeField": 0,
         }
