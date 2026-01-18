@@ -238,6 +238,8 @@ class ScreenManager:
         '8': 'wrkalr',
         '9': 'wrknetdev',
         '10': 'sbmjob',
+        '11': 'wrkusrprf',
+        '12': 'wrklib',
         '90': 'signon',
     }
 
@@ -775,44 +777,36 @@ class ScreenManager:
         return self.get_screen(session, 'main')
 
     def _screen_main(self, session: Session) -> dict:
-        """Main menu screen - 80 columns."""
+        """Main menu screen - 80 columns, IBM MAIN pattern."""
         hostname, date_str, time_str = get_system_info()
 
-        content = []
-        logo = get_logo()
-        if logo:
-            for line in logo.split('\n'):
-                content.append(pad_line(line))
-
-        content.extend([
-            pad_line(""),
-            pad_line(f"                                        Main Menu"),
-            pad_line(""),
-            pad_line(f"                                        System:   {hostname}"),
-            pad_line(f"                                        User:     {session.user}"),
-            pad_line(f"                                        {date_str}  {time_str}"),
+        content = [
+            # Row 1: Screen ID left, title centered
+            pad_line(f"MAIN                           DK/400 Main Menu"),
             pad_line(""),
             pad_line("  Select one of the following:"),
             pad_line(""),
-            pad_line("       1. Work with active jobs                            WRKACTJOB"),
-            pad_line("       2. Work with job queues                             WRKJOBQ"),
-            pad_line("       3. Work with services                               WRKSVC"),
-            pad_line("       4. Work with health checks                          WRKHLTH"),
-            pad_line("       5. Display system status                            DSPSYSSTS"),
-            pad_line("       6. Display log                                      DSPLOG"),
-            pad_line("       7. Work with backups                                WRKBKP"),
-            pad_line("       8. Work with alerts                                 WRKALR"),
-            pad_line("       9. Work with network devices                        WRKNETDEV"),
-            pad_line("      10. Submit job                                       SBMJOB"),
+            pad_line("       1. Work with active jobs"),
+            pad_line("       2. Work with job queues"),
+            pad_line("       3. Work with services"),
+            pad_line("       4. Work with health checks"),
+            pad_line("       5. Display system status"),
+            pad_line("       6. Display log"),
+            pad_line("       7. Work with backups"),
+            pad_line("       8. Work with alerts"),
+            pad_line("       9. Work with network devices"),
+            pad_line("      10. Submit job"),
+            pad_line("      11. Work with user profiles"),
+            pad_line("      12. Work with libraries"),
             pad_line(""),
-            pad_line("      90. Sign off                                         SIGNOFF"),
+            pad_line("      90. Sign off"),
             pad_line(""),
             pad_line("  Selection or command"),
             [
                 {"type": "text", "text": "  ===> "},
                 {"type": "input", "id": "cmd", "width": 66, "value": ""},
             ],
-        ])
+        ]
 
         if session.message:
             content.append([{"type": "text", "text": pad_line(f"  {session.message}"), "class": f"field-{session.message_level}"}])
@@ -2981,7 +2975,7 @@ class ScreenManager:
     # ========== USER MANAGEMENT SCREENS ==========
 
     def _screen_wrkusrprf(self, session: Session) -> dict:
-        """Work with User Profiles screen."""
+        """Work with User Profiles screen - IBM WRKUSRPRF pattern."""
         # Only security officers can access user management
         if session.user_class not in ('*SECOFR', '*SECADM'):
             session.message = "Not authorized to user management"
@@ -2996,24 +2990,18 @@ class ScreenManager:
 
         content = []
 
-        # Header
-        logo = get_logo()
-        if logo:
-            for line in logo.split('\n'):
-                content.append(pad_line(f"  {line}"))
-
-        content.append(pad_line(""))
-        content.append(pad_line(f"  Work with User Profiles                              {hostname}"))
-        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        # Header - centered title, no logo (IBM standard)
+        content.append(pad_line("                           Work with User Profiles"))
         content.append(pad_line(""))
         content.append(pad_line("  Type options, press Enter."))
-        content.append(pad_line("    2=Change   3=Copy   4=Delete   5=Display   7=Rename   8=CHGPWD   12=Auth"))
+        content.append(pad_line("    1=Create   2=Change   4=Delete   5=Display   8=Change password"))
         content.append(pad_line(""))
 
-        # Column headers
-        content.append(pad_line("  Opt  User       Status     Class      Description"))
+        # Column headers - IBM uses "User Profile" and "Text"
+        content.append([{"type": "text", "text": pad_line("       User"), "class": "field-reverse"}])
+        content.append([{"type": "text", "text": pad_line("  Opt  Profile     Text"), "class": "field-reverse"}])
 
-        # User list
+        # User list - IBM pattern: User Profile and Text only
         fields = []
         page_users = users[offset:offset + page_size]
 
@@ -3021,39 +3009,31 @@ class ScreenManager:
             field_id = f"opt_{i}"
             fields.append({"id": field_id})
 
-            status = user.status.replace('*', '')[:10]
-            user_class = user.user_class.replace('*', '')[:10]
-            desc = user.description[:30] if user.description else ""
+            # IBM shows just profile name and description (Text)
+            desc = user.description[:50] if user.description else ""
 
             content.append([
                 {"type": "text", "text": "  "},
                 {"type": "input", "id": field_id, "width": 3, "value": ""},
-                {"type": "text", "text": f"  {user.username:<10} {status:<10} {user_class:<10} {desc}"},
+                {"type": "text", "text": f"  {user.username:<10} {desc}"},
             ])
 
         # Pad empty rows
         for _ in range(page_size - len(page_users)):
             content.append(pad_line(""))
 
-        # Footer
+        # More/Bottom indicator
         more = "More..." if len(users) > offset + page_size else "Bottom"
         content.append(pad_line(f"                                                              {more}"))
-        content.append(pad_line(""))
 
-        # Command line
-        fields.append({"id": "cmd"})
-        content.append([
-            {"type": "text", "text": " Command"},
-            {"type": "text", "text": pad_line("", 70)},
-        ])
-        content.append([
-            {"type": "text", "text": " ===> "},
-            {"type": "input", "id": "cmd", "width": 60, "value": ""},
-        ])
+        # Message line
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
 
-        # Function keys
-        content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        # Function keys - IBM standard
+        content.append(pad_line("  F3=Exit   F5=Refresh   F6=Create   F12=Cancel"))
 
         return {
             "type": "screen",
@@ -3074,7 +3054,9 @@ class ScreenManager:
         for i, user in enumerate(page_users):
             opt = fields.get(f"opt_{i}", "").strip()
             if opt:
-                if opt == '2':  # Change
+                if opt == '1':  # Create (IBM allows 1 on any row)
+                    return self.get_screen(session, 'user_create')
+                elif opt == '2':  # Change
                     session.field_values['selected_user'] = user.username
                     return self.get_screen(session, 'user_change')
                 elif opt == '4':  # Delete
@@ -3328,19 +3310,15 @@ class ScreenManager:
         return self.get_screen(session, 'user_chgpwd')
 
     def _screen_user_create(self, session: Session) -> dict:
-        """Create User Profile screen."""
+        """Create User Profile screen - IBM CRTUSRPRF pattern."""
         hostname, date_str, time_str = get_system_info()
 
         content = []
 
-        logo = get_logo()
-        if logo:
-            for line in logo.split('\n'):
-                content.append(pad_line(f"  {line}"))
-
+        # Header - centered title with command name, no logo (IBM standard)
+        content.append(pad_line("                        Create User Profile (CRTUSRPRF)"))
         content.append(pad_line(""))
-        content.append(pad_line(f"  Create User Profile (CRTUSRPRF)                      {hostname}"))
-        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line("  Type choices, press Enter."))
         content.append(pad_line(""))
 
         # Message display
@@ -3349,45 +3327,52 @@ class ScreenManager:
         else:
             content.append(pad_line(""))
 
-        content.append(pad_line(""))
-        content.append([
-            {"type": "text", "text": "    User profile  . . . . . . . . . :   "},
-            {"type": "input", "id": "new_user", "width": 10, "value": ""},
-        ])
-        content.append([
-            {"type": "text", "text": "    Password  . . . . . . . . . . . :   "},
-            {"type": "input", "id": "new_pwd", "width": 10, "password": True},
-        ])
-        content.append([
-            {"type": "text", "text": "    Confirm password  . . . . . . . :   "},
-            {"type": "input", "id": "confirm_pwd", "width": 10, "password": True},
-        ])
         # Get values - prefer F4 selected, then previously entered, then default
         user_class_val = session.field_values.get('f4_selected_user_class') or session.field_values.get('user_class', '*USER')
         group_profile_val = session.field_values.get('f4_selected_group_profile') or session.field_values.get('group_profile', '*NONE')
 
+        # IBM format: Label . . . . . :  [field]    Valid values
         content.append([
-            {"type": "text", "text": "    User class  . . . . . . . . . . :   "},
+            {"type": "text", "text": "  User profile . . . . . . . . . .   "},
+            {"type": "input", "id": "new_user", "width": 10, "value": ""},
+            {"type": "text", "text": "    Name"},
+        ])
+        content.append([
+            {"type": "text", "text": "  User password  . . . . . . . . .   "},
+            {"type": "input", "id": "new_pwd", "width": 10, "password": True},
+            {"type": "text", "text": "    Character value"},
+        ])
+        content.append([
+            {"type": "text", "text": "  Confirm password . . . . . . . .   "},
+            {"type": "input", "id": "confirm_pwd", "width": 10, "password": True},
+            {"type": "text", "text": "    Re-enter to verify"},
+        ])
+        content.append([
+            {"type": "text", "text": "  User class . . . . . . . . . . .   "},
             {"type": "input", "id": "user_class", "width": 10, "value": user_class_val},
+            {"type": "text", "text": "    *USER, *SYSOPR, *PGMR..."},
         ])
         content.append([
-            {"type": "text", "text": "    Group profile . . . . . . . . . :   "},
+            {"type": "text", "text": "  Group profile  . . . . . . . . .   "},
             {"type": "input", "id": "group_profile", "width": 10, "value": group_profile_val},
+            {"type": "text", "text": "    Name, *NONE"},
         ])
         content.append([
-            {"type": "text", "text": "    Description . . . . . . . . . . :   "},
+            {"type": "text", "text": "  Text 'description' . . . . . . .   "},
             {"type": "input", "id": "description", "width": 30, "value": ""},
         ])
         content.append([
-            {"type": "text", "text": "    Copy authorities from . . . . . :   "},
+            {"type": "text", "text": "  Copy authorities from  . . . . .   "},
             {"type": "input", "id": "copy_from", "width": 10, "value": ""},
+            {"type": "text", "text": "    Name, blank=none"},
         ])
         content.append(pad_line(""))
-        content.append(pad_line("    Valid classes: *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER"))
-        content.append(pad_line("    Group profile: User to inherit authorities from (*NONE for none)"))
-        content.append(pad_line("    Copy authorities from: Copy object authorities from this user"))
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line("  F3=Exit   F4=Prompt   F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4098,7 +4083,7 @@ class ScreenManager:
     # ========== SYSTEM VALUES SCREENS ==========
 
     def _screen_wrksysval(self, session: Session) -> dict:
-        """Work with System Values screen."""
+        """Work with System Values screen - IBM WRKSYSVAL pattern."""
         # Only security officers can manage system values
         if session.user_class not in ('*SECOFR', '*SECADM'):
             session.message = "Not authorized to system values"
@@ -4109,35 +4094,21 @@ class ScreenManager:
 
         sysvals = list_system_values()
         offset = session.get_offset('wrksysval')
-        page_size = 10
+        page_size = 12
 
         content = []
 
-        # Header with configurable logo
-        logo = get_logo()
-        if logo:
-            for line in logo.split('\n'):
-                content.append(pad_line(f"  {line}"))
-
+        # Header - centered title, no logo (IBM standard)
+        content.append(pad_line("                         Work with System Values"))
         content.append(pad_line(""))
-        content.append(pad_line(f"  Work with System Values                              {hostname}"))
-        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line("  Type options, press Enter."))
+        content.append(pad_line("    2=Change   5=Display"))
         content.append(pad_line(""))
 
-        # Message display
-        if session.message:
-            content.append(self._message_line(session))
-        else:
-            content.append(pad_line(""))
+        # Column headers - IBM pattern: System Value and Description
+        content.append([{"type": "text", "text": pad_line("  Opt  System Value    Description"), "class": "field-reverse"}])
 
-        content.append(pad_line("  Type option, press Enter."))
-        content.append(pad_line("    2=Change"))
-        content.append(pad_line(""))
-
-        # Column headers
-        content.append(pad_line("  Opt  System Value    Value                Category"))
-
-        # System values list
+        # System values list - IBM shows name and description, not value
         fields = []
         page_vals = sysvals[offset:offset + page_size]
 
@@ -4145,21 +4116,29 @@ class ScreenManager:
             field_id = f"opt_{i}"
             fields.append({"id": field_id})
 
+            # IBM shows system value name and description (category serves as description)
             content.append([
                 {"type": "text", "text": "  "},
                 {"type": "input", "id": field_id, "width": 3, "value": ""},
-                {"type": "text", "text": f"  {sv['name']:<14} {sv['value']:<20} {sv['category']}"},
+                {"type": "text", "text": f"  {sv['name']:<14} {sv['category'][:45]}"},
             ])
 
         # Pad empty rows
         for _ in range(page_size - len(page_vals)):
             content.append(pad_line(""))
 
-        # Footer
+        # More/Bottom indicator
         more = "More..." if len(sysvals) > offset + page_size else "Bottom"
         content.append(pad_line(f"                                                              {more}"))
-        content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+
+        # Message line
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        # Function keys - IBM standard
+        content.append(pad_line("  F3=Exit   F5=Refresh   F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4174,7 +4153,7 @@ class ScreenManager:
         """Handle Work with System Values submission."""
         sysvals = list_system_values()
         offset = session.get_offset('wrksysval')
-        page_size = 10
+        page_size = 12
         page_vals = sysvals[offset:offset + page_size]
 
         for i, sv in enumerate(page_vals):
@@ -4184,6 +4163,11 @@ class ScreenManager:
                 session.field_values['sysval_value'] = sv['value']
                 session.field_values['sysval_desc'] = sv['description']
                 return self.get_screen(session, 'chgsysval')
+            elif opt == '5':  # Display
+                session.field_values['selected_sysval'] = sv['name']
+                session.field_values['sysval_value'] = sv['value']
+                session.field_values['sysval_desc'] = sv['description']
+                return self.get_screen(session, 'dspsysval')
 
         return self.get_screen(session, 'wrksysval')
 
