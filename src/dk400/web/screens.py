@@ -3140,7 +3140,7 @@ class ScreenManager:
         return self.get_screen(session, 'wrkusrprf')
 
     def _screen_user_display(self, session: Session) -> dict:
-        """Display User Profile details."""
+        """Display User Profile - AS/400 DSPUSRPRF format with multiple pages."""
         hostname, date_str, time_str = get_system_info()
         username = session.field_values.get('selected_user', 'QUSER')
         user = user_manager.get_user(username)
@@ -3150,35 +3150,117 @@ class ScreenManager:
             session.message_level = "error"
             return self.get_screen(session, 'wrkusrprf')
 
+        # Get current page (1-3)
+        page = session.context.get('usrprf_page', 1)
+
         content = []
+        content.append(pad_line(f"                           Display User Profile"))
+        content.append(pad_line(""))
 
-        logo = get_logo()
-        if logo:
-            for line in logo.split('\n'):
-                content.append(pad_line(f"  {line}"))
+        if page == 1:
+            # Page 1: Basic info, password, authorities
+            # Format last signon date
+            last_signon_fmt = ""
+            if user.last_signon:
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(user.last_signon.replace(' ', 'T').split('.')[0])
+                    last_signon_fmt = dt.strftime('%m/%d/%y   %H:%M:%S')
+                except:
+                    last_signon_fmt = user.last_signon[:20]
 
-        content.append(pad_line(""))
-        content.append(pad_line(f"  Display User Profile                                 {hostname}"))
-        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
-        content.append(pad_line(""))
-        content.append(pad_line(f"    User profile  . . . . . . . . . :   {user.username}"))
-        content.append(pad_line(f"    Status  . . . . . . . . . . . . :   {user.status}"))
-        content.append(pad_line(f"    User class  . . . . . . . . . . :   {user.user_class}"))
-        content.append(pad_line(f"    Group profile . . . . . . . . . :   {user.group_profile}"))
-        content.append(pad_line(f"    Description . . . . . . . . . . :   {user.description}"))
-        content.append(pad_line(""))
-        content.append(pad_line(f"    Created . . . . . . . . . . . . :   {user.created}"))
-        content.append(pad_line(f"    Last sign-on  . . . . . . . . . :   {user.last_signon or 'Never'}"))
-        content.append(pad_line(f"    Sign-on attempts  . . . . . . . :   {user.signon_attempts}"))
-        content.append(pad_line(f"    Password expires  . . . . . . . :   {user.password_expires}"))
-        content.append(pad_line(""))
-        content.append(pad_line(""))
-        content.append(pad_line(""))
-        content.append(pad_line(""))
-        content.append(pad_line(""))
-        content.append(pad_line(""))
-        content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+            content.append(pad_line(f"  User profile . . . . . . . . . . . :   {user.username}"))
+            content.append(pad_line(f"    Previous sign-on . . . . . . . . :   {last_signon_fmt}"))
+            content.append(pad_line(f"    Sign-on attempts not valid . . . :   {user.signon_attempts}"))
+            content.append(pad_line(f"  Status . . . . . . . . . . . . . . :   {user.status}"))
+            content.append(pad_line(f"    Password expiration interval . . :   {user.password_expires}"))
+            content.append(pad_line(f"    Set password to expired  . . . . :   {user.password_expired}"))
+            content.append(pad_line(f"  User class . . . . . . . . . . . . :   {user.user_class}"))
+
+            # Special authorities (display up to 2 rows of 4)
+            spcaut = user.spcaut if user.spcaut else ['*NONE']
+            spcaut_str = '  '.join(spcaut[:4]) if spcaut else '*NONE'
+            content.append(pad_line(f"  Special authority  . . . . . . . . :   {spcaut_str}"))
+            if len(spcaut) > 4:
+                spcaut_str2 = '  '.join(spcaut[4:8])
+                content.append(pad_line(f"                                         {spcaut_str2}"))
+            else:
+                content.append(pad_line(""))
+
+            content.append(pad_line(f"  Group profile  . . . . . . . . . . :   {user.group_profile}"))
+
+            # Supplemental groups
+            supgrp = user.supgrpprf if user.supgrpprf else []
+            supgrp_str = '  '.join(supgrp[:4]) if supgrp else '*NONE'
+            content.append(pad_line(f"  Supplemental groups  . . . . . . . :   {supgrp_str}"))
+
+            content.append(pad_line(f"  Owner  . . . . . . . . . . . . . . :   {user.owner}"))
+            content.append(pad_line(f"  Group authority  . . . . . . . . . :   {user.grpaut}"))
+            content.append(pad_line(f"  Group authority type . . . . . . . :   {user.grpauttyp}"))
+            content.append(pad_line(f"  Assistance level . . . . . . . . . :   {user.astlvl}"))
+            content.append(pad_line(f"  Current library  . . . . . . . . . :   {user.current_library}"))
+            content.append(pad_line(""))
+
+        elif page == 2:
+            # Page 2: Initial program/menu, output, job attributes
+            content.append(pad_line(f"  User profile . . . . . . . . . . . :   {user.username}"))
+            inlpgm_lib = user.inlpgm_lib if user.inlpgm_lib else ""
+            content.append(pad_line(f"    Initial program to call  . . . . :   {user.inlpgm}"))
+            content.append(pad_line(f"      Library  . . . . . . . . . . . :     {inlpgm_lib}"))
+            inlmnu_lib = user.inlmnu_lib if user.inlmnu_lib else ""
+            content.append(pad_line(f"    Initial menu . . . . . . . . . . :   {user.inlmnu}"))
+            content.append(pad_line(f"      Library  . . . . . . . . . . . :     {inlmnu_lib}"))
+            content.append(pad_line(f"    Limit capabilities . . . . . . . :   {user.lmtcpb}"))
+            content.append(pad_line(f"  Text 'description' . . . . . . . . :   {user.description}"))
+            content.append(pad_line(""))
+            outq_lib = user.outq_lib if user.outq_lib else ""
+            content.append(pad_line(f"  Output queue . . . . . . . . . . . :   {user.outq}"))
+            content.append(pad_line(f"      Library  . . . . . . . . . . . :     {outq_lib}"))
+            content.append(pad_line(f"  Print device . . . . . . . . . . . :   {user.prtdev}"))
+            content.append(pad_line(f"  Special environment  . . . . . . . :   {user.spcenv}"))
+            content.append(pad_line(f"  Keyboard buffering . . . . . . . . :   {user.kbdbuf}"))
+            content.append(pad_line(""))
+            content.append(pad_line(f"  Maximum allowed storage  . . . . . :   {user.maxstg}"))
+            content.append(pad_line(f"    Storage used . . . . . . . . . . :   {user.curstrg}"))
+            content.append(pad_line(""))
+
+        elif page == 3:
+            # Page 3: Message queue, job description, locale
+            content.append(pad_line(f"  User profile . . . . . . . . . . . :   {user.username}"))
+            content.append(pad_line(f"    Message queue  . . . . . . . . . :   {user.msgq}"))
+            content.append(pad_line(f"      Library  . . . . . . . . . . . :     {user.msgq_lib}"))
+            content.append(pad_line(f"      Delivery . . . . . . . . . . . :     {user.dlvry}"))
+            content.append(pad_line(f"      Severity . . . . . . . . . . . :     {user.sev:02d}"))
+            content.append(pad_line(""))
+            content.append(pad_line(f"    Job description  . . . . . . . . :   {user.jobd}"))
+            content.append(pad_line(f"      Library  . . . . . . . . . . . :     {user.jobd_lib}"))
+            atnpgm_lib = user.atnpgm_lib if user.atnpgm_lib else ""
+            content.append(pad_line(f"    Attention program  . . . . . . . :   {user.atnpgm}"))
+            content.append(pad_line(f"      Library  . . . . . . . . . . . :     {atnpgm_lib}"))
+            srtseq_lib = user.srtseq_lib if user.srtseq_lib else ""
+            content.append(pad_line(f"    Sort sequence  . . . . . . . . . :   {user.srtseq}"))
+            content.append(pad_line(f"      Library  . . . . . . . . . . . :     {srtseq_lib}"))
+            content.append(pad_line(""))
+            content.append(pad_line(f"    Language ID  . . . . . . . . . . :   {user.langid}"))
+            content.append(pad_line(f"    Country or region ID . . . . . . :   {user.cntryid}"))
+            content.append(pad_line(f"    Character code set ID  . . . . . :   {user.ccsid}"))
+            content.append(pad_line(""))
+
+        # Pad to fill screen
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        # Page indicator and navigation
+        if page < 3:
+            content.append(pad_line("                                                          More..."))
+        else:
+            content.append(pad_line("                                                          Bottom"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit   F12=Cancel"))
 
         return {
             "type": "screen",
@@ -3188,6 +3270,27 @@ class ScreenManager:
             "fields": [],
             "activeField": 0,
         }
+
+    def _submit_user_display(self, session: Session, fields: dict) -> dict:
+        """Handle Display User Profile submission (page navigation)."""
+        return self.get_screen(session, 'user_display')
+
+    def _fkey_user_display(self, session: Session, key: str, fields: dict) -> dict:
+        """Handle function keys on Display User Profile."""
+        if key == 'F3' or key == 'F12':
+            session.context.pop('usrprf_page', None)
+            return self.get_screen(session, 'wrkusrprf')
+        elif key == 'PageDown' or key == 'Enter':
+            page = session.context.get('usrprf_page', 1)
+            if page < 3:
+                session.context['usrprf_page'] = page + 1
+            return self.get_screen(session, 'user_display')
+        elif key == 'PageUp':
+            page = session.context.get('usrprf_page', 1)
+            if page > 1:
+                session.context['usrprf_page'] = page - 1
+            return self.get_screen(session, 'user_display')
+        return self.get_screen(session, 'user_display')
 
     def _screen_user_authorities(self, session: Session) -> dict:
         """Display User Authorities screen - shows all object authorities for a user."""

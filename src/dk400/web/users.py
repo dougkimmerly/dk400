@@ -22,18 +22,104 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class UserProfile:
-    """AS/400-style user profile."""
+    """AS/400-style user profile - full DSPUSRPRF compatible."""
+    # Identity
     username: str
     password_hash: str
     salt: str
-    user_class: str = "*USER"  # *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER
-    status: str = "*ENABLED"   # *ENABLED, *DISABLED
-    description: str = ""
-    group_profile: str = "*NONE"  # Group to inherit authorities from
+
+    # Classification
+    user_class: str = "*USER"       # *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER
+    status: str = "*ENABLED"        # *ENABLED, *DISABLED
+    description: str = ""           # Text 'description'
+
+    # Password
+    password_expires: str = "*NOMAX"
+    password_last_changed: str = ""
+    password_expired: str = "*NO"
+    signon_attempts: int = 0
+
+    # Authority
+    spcaut: list = None             # Special authorities
+    group_profile: str = "*NONE"
+    supgrpprf: list = None          # Supplemental groups
+    owner: str = "*USRPRF"
+    grpaut: str = "*NONE"
+    grpauttyp: str = "*PRIVATE"
+
+    # Initial program/menu
+    inlpgm: str = "*NONE"
+    inlpgm_lib: str = ""
+    inlmnu: str = "MAIN"
+    inlmnu_lib: str = "*LIBL"
+    lmtcpb: str = "*NO"
+
+    # Library list
+    current_library: str = "QGPL"
+    inllibl: list = None            # Initial library list
+
+    # Output
+    outq: str = "*WRKSTN"
+    outq_lib: str = ""
+    prtdev: str = "*WRKSTN"
+
+    # Message queue
+    msgq: str = ""
+    msgq_lib: str = "QUSRSYS"
+    dlvry: str = "*NOTIFY"
+    sev: int = 0
+
+    # Job description
+    jobd: str = "QDFTJOBD"
+    jobd_lib: str = "QGPL"
+
+    # Attention program
+    atnpgm: str = "*SYSVAL"
+    atnpgm_lib: str = ""
+
+    # Locale
+    srtseq: str = "*SYSVAL"
+    srtseq_lib: str = ""
+    langid: str = "*SYSVAL"
+    cntryid: str = "*SYSVAL"
+    ccsid: str = "*SYSVAL"
+
+    # Environment
+    spcenv: str = "*NONE"
+    astlvl: str = "*SYSVAL"
+    dspsgninf: str = "*NO"
+    lmtdevssn: str = "*SYSVAL"
+    kbdbuf: str = "*SYSVAL"
+
+    # Storage
+    maxstg: str = "*NOMAX"
+    curstrg: int = 0
+
+    # Other
+    acgcde: str = ""
+    homedir: str = ""
+    usropt: list = None
+    objaud: str = "*NONE"
+    audlvl: list = None
+
+    # Timestamps
     created: str = ""
     last_signon: str = ""
-    signon_attempts: int = 0
-    password_expires: str = "*NOMAX"
+
+    def __post_init__(self):
+        """Initialize list fields."""
+        if self.spcaut is None:
+            self.spcaut = []
+        if self.supgrpprf is None:
+            self.supgrpprf = []
+        if self.inllibl is None:
+            self.inllibl = ["QGPL", "QSYS"]
+        if self.usropt is None:
+            self.usropt = []
+        if self.audlvl is None:
+            self.audlvl = []
+        if not self.msgq:
+            self.msgq = self.username
 
     @classmethod
     def from_row(cls, row: dict) -> 'UserProfile':
@@ -45,11 +131,53 @@ class UserProfile:
             user_class=row.get('user_class', '*USER'),
             status=row.get('status', '*ENABLED'),
             description=row.get('description', ''),
+            password_expires=row.get('password_expires', '*NOMAX'),
+            password_last_changed=str(row['password_last_changed']) if row.get('password_last_changed') else '',
+            password_expired=row.get('password_expired', '*NO'),
+            signon_attempts=row.get('signon_attempts', 0),
+            spcaut=row.get('spcaut') or [],
             group_profile=row.get('group_profile', '*NONE'),
+            supgrpprf=row.get('supgrpprf') or [],
+            owner=row.get('owner', '*USRPRF'),
+            grpaut=row.get('grpaut', '*NONE'),
+            grpauttyp=row.get('grpauttyp', '*PRIVATE'),
+            inlpgm=row.get('inlpgm', '*NONE'),
+            inlpgm_lib=row.get('inlpgm_lib', ''),
+            inlmnu=row.get('inlmnu', 'MAIN'),
+            inlmnu_lib=row.get('inlmnu_lib', '*LIBL'),
+            lmtcpb=row.get('lmtcpb', '*NO'),
+            current_library=row.get('current_library', 'QGPL'),
+            inllibl=row.get('inllibl') or row.get('library_list') or ["QGPL", "QSYS"],
+            outq=row.get('outq', '*WRKSTN'),
+            outq_lib=row.get('outq_lib', ''),
+            prtdev=row.get('prtdev', '*WRKSTN'),
+            msgq=row.get('msgq') or row['username'],
+            msgq_lib=row.get('msgq_lib', 'QUSRSYS'),
+            dlvry=row.get('dlvry', '*NOTIFY'),
+            sev=row.get('sev', 0),
+            jobd=row.get('jobd', 'QDFTJOBD'),
+            jobd_lib=row.get('jobd_lib', 'QGPL'),
+            atnpgm=row.get('atnpgm', '*SYSVAL'),
+            atnpgm_lib=row.get('atnpgm_lib', ''),
+            srtseq=row.get('srtseq', '*SYSVAL'),
+            srtseq_lib=row.get('srtseq_lib', ''),
+            langid=row.get('langid', '*SYSVAL'),
+            cntryid=row.get('cntryid', '*SYSVAL'),
+            ccsid=row.get('ccsid', '*SYSVAL'),
+            spcenv=row.get('spcenv', '*NONE'),
+            astlvl=row.get('astlvl', '*SYSVAL'),
+            dspsgninf=row.get('dspsgninf', '*NO'),
+            lmtdevssn=row.get('lmtdevssn', '*SYSVAL'),
+            kbdbuf=row.get('kbdbuf', '*SYSVAL'),
+            maxstg=row.get('maxstg', '*NOMAX'),
+            curstrg=row.get('curstrg', 0),
+            acgcde=row.get('acgcde', ''),
+            homedir=row.get('homedir', ''),
+            usropt=row.get('usropt') or [],
+            objaud=row.get('objaud', '*NONE'),
+            audlvl=row.get('audlvl') or [],
             created=str(row['created']) if row.get('created') else '',
             last_signon=str(row['last_signon']) if row.get('last_signon') else '',
-            signon_attempts=row.get('signon_attempts', 0),
-            password_expires=row.get('password_expires', '*NOMAX'),
         )
 
 

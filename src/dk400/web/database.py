@@ -34,25 +34,101 @@ SCHEMA_SQL = """
 -- =============================================================================
 CREATE SCHEMA IF NOT EXISTS qsys;
 
--- User Profiles (*USRPRF objects)
+-- User Profiles (*USRPRF objects) - Full AS/400 compatible
 CREATE TABLE IF NOT EXISTS qsys.qausrprf (
+    -- Identity
     username VARCHAR(10) PRIMARY KEY,
     password_hash VARCHAR(128) NOT NULL,
     salt VARCHAR(64) NOT NULL,
-    user_class VARCHAR(10) DEFAULT '*USER',
-    status VARCHAR(10) DEFAULT '*ENABLED',
-    description VARCHAR(50) DEFAULT '',
+
+    -- Classification
+    user_class VARCHAR(10) DEFAULT '*USER',  -- *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER
+    status VARCHAR(10) DEFAULT '*ENABLED',   -- *ENABLED, *DISABLED
+    description VARCHAR(50) DEFAULT '',      -- Text 'description'
+
+    -- Password settings
+    password_expires VARCHAR(10) DEFAULT '*NOMAX',  -- PWDEXPITV: *SYSVAL, *NOMAX, or days
+    password_last_changed TIMESTAMP,                 -- Date password last changed
+    password_expired VARCHAR(4) DEFAULT '*NO',       -- *YES, *NO
+    signon_attempts INTEGER DEFAULT 0,               -- Sign-on attempts not valid
+
+    -- Authority
+    spcaut JSONB DEFAULT '[]',               -- Special authorities: *ALLOBJ, *SECADM, *JOBCTL, *SPLCTL, *SAVSYS, *SERVICE, *AUDIT, *IOSYSCFG
     group_profile VARCHAR(10) DEFAULT '*NONE',
-    current_library VARCHAR(10) DEFAULT 'QGPL',
-    library_list JSONB DEFAULT '["QGPL", "QSYS"]',
+    supgrpprf JSONB DEFAULT '[]',            -- Supplemental groups (up to 15)
+    owner VARCHAR(10) DEFAULT '*USRPRF',     -- *USRPRF, *GRPPRF
+    grpaut VARCHAR(10) DEFAULT '*NONE',      -- *NONE, *ALL, *CHANGE, *USE, *EXCLUDE
+    grpauttyp VARCHAR(10) DEFAULT '*PRIVATE', -- *PRIVATE, *PGP
+
+    -- Initial program/menu
+    inlpgm VARCHAR(10) DEFAULT '*NONE',      -- Initial program
+    inlpgm_lib VARCHAR(10) DEFAULT '',       -- Library for initial program
+    inlmnu VARCHAR(10) DEFAULT 'MAIN',       -- Initial menu
+    inlmnu_lib VARCHAR(10) DEFAULT '*LIBL',  -- Library for initial menu
+    lmtcpb VARCHAR(10) DEFAULT '*NO',        -- Limit capabilities: *NO, *YES, *PARTIAL
+
+    -- Library list
+    current_library VARCHAR(10) DEFAULT 'QGPL',  -- CURLIB
+    inllibl JSONB DEFAULT '["QGPL", "QSYS"]',    -- Initial library list (user portion)
+
+    -- Output
+    outq VARCHAR(10) DEFAULT '*WRKSTN',      -- Output queue
+    outq_lib VARCHAR(10) DEFAULT '',         -- Library for output queue
+    prtdev VARCHAR(10) DEFAULT '*WRKSTN',    -- Print device
+
+    -- Message queue
+    msgq VARCHAR(10),                        -- Message queue (defaults to username)
+    msgq_lib VARCHAR(10) DEFAULT 'QUSRSYS',  -- Library for message queue
+    dlvry VARCHAR(10) DEFAULT '*NOTIFY',     -- Delivery: *HOLD, *BREAK, *NOTIFY, *DFT
+    sev INTEGER DEFAULT 0,                   -- Severity filter (0-99)
+
+    -- Job description
+    jobd VARCHAR(10) DEFAULT 'QDFTJOBD',     -- Job description
+    jobd_lib VARCHAR(10) DEFAULT 'QGPL',     -- Library for job description
+
+    -- Attention program
+    atnpgm VARCHAR(10) DEFAULT '*SYSVAL',    -- Attention program
+    atnpgm_lib VARCHAR(10) DEFAULT '',       -- Library for attention program
+
+    -- Locale settings
+    srtseq VARCHAR(10) DEFAULT '*SYSVAL',    -- Sort sequence
+    srtseq_lib VARCHAR(10) DEFAULT '',       -- Library for sort sequence
+    langid VARCHAR(10) DEFAULT '*SYSVAL',    -- Language ID
+    cntryid VARCHAR(10) DEFAULT '*SYSVAL',   -- Country or region ID
+    ccsid VARCHAR(10) DEFAULT '*SYSVAL',     -- Character code set ID
+
+    -- Environment
+    spcenv VARCHAR(10) DEFAULT '*NONE',      -- Special environment: *NONE, *S36, *S38
+    astlvl VARCHAR(10) DEFAULT '*SYSVAL',    -- Assistance level: *SYSVAL, *BASIC, *INTERMED, *ADVANCED
+    dspsgninf VARCHAR(4) DEFAULT '*NO',      -- Display sign-on information: *YES, *NO
+    lmtdevssn VARCHAR(10) DEFAULT '*SYSVAL', -- Limit device sessions: *SYSVAL, *YES, *NO
+    kbdbuf VARCHAR(10) DEFAULT '*SYSVAL',    -- Keyboard buffering: *SYSVAL, *TYPEAHEAD, *NO, *YES
+
+    -- Storage
+    maxstg VARCHAR(15) DEFAULT '*NOMAX',     -- Maximum allowed storage (KB or *NOMAX)
+    curstrg BIGINT DEFAULT 0,                -- Storage used (KB)
+
+    -- Accounting
+    acgcde VARCHAR(15) DEFAULT '',           -- Accounting code
+
+    -- Home directory
+    homedir VARCHAR(256) DEFAULT '',         -- Home directory (IFS path)
+
+    -- User options
+    usropt JSONB DEFAULT '[]',               -- User options: *CLKWD, *EXPERT, *ROLLKEY, *NOSTSMSG, *STSMSG, *HLPFULL, *PRTMSG
+
+    -- Auditing
+    objaud VARCHAR(10) DEFAULT '*NONE',      -- Object auditing: *NONE, *USRPRF, *CHANGE, *ALL
+    audlvl JSONB DEFAULT '[]',               -- User action auditing levels
+
+    -- Timestamps
     created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_signon TIMESTAMP,
-    signon_attempts INTEGER DEFAULT 0,
-    password_expires VARCHAR(10) DEFAULT '*NOMAX'
+    last_signon TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_qausrprf_status ON qsys.qausrprf(status);
 CREATE INDEX IF NOT EXISTS idx_qausrprf_group ON qsys.qausrprf(group_profile);
+CREATE INDEX IF NOT EXISTS idx_qausrprf_usrcls ON qsys.qausrprf(user_class);
 
 -- Job history table (QJOBHST)
 CREATE TABLE IF NOT EXISTS qsys._jobhst (
@@ -471,7 +547,7 @@ def init_database() -> bool:
         _rename_tables_to_as400_style()
 
         # Add library list columns to users (for upgrades)
-        _add_library_list_columns()
+        _add_usrprf_columns()
 
         # Migrate existing objects to library schemas
         _migrate_objects_to_libraries()
@@ -553,23 +629,100 @@ def _migrate_public_to_qsys():
         logger.warning(f"Public to qsys migration: {e}")
 
 
-def _add_library_list_columns():
-    """Add current_library and library_list columns to existing users table."""
+def _add_usrprf_columns():
+    """Add all AS/400 user profile columns to existing qausrprf table."""
+    # Define all columns that should exist with their defaults
+    columns = [
+        # Password settings
+        ("password_last_changed", "TIMESTAMP", None),
+        ("password_expired", "VARCHAR(4)", "'*NO'"),
+        # Authority
+        ("spcaut", "JSONB", "'[]'"),
+        ("supgrpprf", "JSONB", "'[]'"),
+        ("owner", "VARCHAR(10)", "'*USRPRF'"),
+        ("grpaut", "VARCHAR(10)", "'*NONE'"),
+        ("grpauttyp", "VARCHAR(10)", "'*PRIVATE'"),
+        # Initial program/menu
+        ("inlpgm", "VARCHAR(10)", "'*NONE'"),
+        ("inlpgm_lib", "VARCHAR(10)", "''"),
+        ("inlmnu", "VARCHAR(10)", "'MAIN'"),
+        ("inlmnu_lib", "VARCHAR(10)", "'*LIBL'"),
+        ("lmtcpb", "VARCHAR(10)", "'*NO'"),
+        # Library list
+        ("current_library", "VARCHAR(10)", "'QGPL'"),
+        ("inllibl", "JSONB", "'[\"QGPL\", \"QSYS\"]'"),
+        # Output
+        ("outq", "VARCHAR(10)", "'*WRKSTN'"),
+        ("outq_lib", "VARCHAR(10)", "''"),
+        ("prtdev", "VARCHAR(10)", "'*WRKSTN'"),
+        # Message queue
+        ("msgq", "VARCHAR(10)", None),
+        ("msgq_lib", "VARCHAR(10)", "'QUSRSYS'"),
+        ("dlvry", "VARCHAR(10)", "'*NOTIFY'"),
+        ("sev", "INTEGER", "0"),
+        # Job description
+        ("jobd", "VARCHAR(10)", "'QDFTJOBD'"),
+        ("jobd_lib", "VARCHAR(10)", "'QGPL'"),
+        # Attention program
+        ("atnpgm", "VARCHAR(10)", "'*SYSVAL'"),
+        ("atnpgm_lib", "VARCHAR(10)", "''"),
+        # Locale settings
+        ("srtseq", "VARCHAR(10)", "'*SYSVAL'"),
+        ("srtseq_lib", "VARCHAR(10)", "''"),
+        ("langid", "VARCHAR(10)", "'*SYSVAL'"),
+        ("cntryid", "VARCHAR(10)", "'*SYSVAL'"),
+        ("ccsid", "VARCHAR(10)", "'*SYSVAL'"),
+        # Environment
+        ("spcenv", "VARCHAR(10)", "'*NONE'"),
+        ("astlvl", "VARCHAR(10)", "'*SYSVAL'"),
+        ("dspsgninf", "VARCHAR(4)", "'*NO'"),
+        ("lmtdevssn", "VARCHAR(10)", "'*SYSVAL'"),
+        ("kbdbuf", "VARCHAR(10)", "'*SYSVAL'"),
+        # Storage
+        ("maxstg", "VARCHAR(15)", "'*NOMAX'"),
+        ("curstrg", "BIGINT", "0"),
+        # Accounting
+        ("acgcde", "VARCHAR(15)", "''"),
+        # Home directory
+        ("homedir", "VARCHAR(256)", "''"),
+        # User options
+        ("usropt", "JSONB", "'[]'"),
+        # Auditing
+        ("objaud", "VARCHAR(10)", "'*NONE'"),
+        ("audlvl", "JSONB", "'[]'"),
+    ]
+
     try:
         with get_cursor(dict_cursor=False) as cursor:
-            # Add current_library column if not exists
+            for col_name, col_type, default in columns:
+                try:
+                    if default:
+                        cursor.execute(f"""
+                            ALTER TABLE qsys.qausrprf
+                            ADD COLUMN IF NOT EXISTS {col_name} {col_type} DEFAULT {default}
+                        """)
+                    else:
+                        cursor.execute(f"""
+                            ALTER TABLE qsys.qausrprf
+                            ADD COLUMN IF NOT EXISTS {col_name} {col_type}
+                        """)
+                except Exception as e:
+                    logger.debug(f"Column {col_name}: {e}")
+
+            # Migrate old library_list to inllibl if exists
             cursor.execute("""
-                ALTER TABLE qsys.qausrprf
-                ADD COLUMN IF NOT EXISTS current_library VARCHAR(10) DEFAULT 'QGPL'
+                UPDATE qsys.qausrprf SET inllibl = library_list
+                WHERE inllibl IS NULL AND library_list IS NOT NULL
             """)
-            # Add library_list column if not exists
+
+            # Set msgq to username where null
             cursor.execute("""
-                ALTER TABLE qsys.qausrprf
-                ADD COLUMN IF NOT EXISTS library_list JSONB DEFAULT '["QGPL", "QSYS"]'
+                UPDATE qsys.qausrprf SET msgq = username WHERE msgq IS NULL
             """)
-        logger.info("Library list columns added to users table")
+
+        logger.info("AS/400 user profile columns added")
     except Exception as e:
-        logger.warning(f"Adding library list columns: {e}")
+        logger.warning(f"Adding user profile columns: {e}")
 
 
 def _rename_tables_to_as400_style():
