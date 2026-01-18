@@ -400,6 +400,17 @@ CREATE TABLE IF NOT EXISTS query_definitions (
 CREATE INDEX IF NOT EXISTS idx_qrydfn_user ON query_definitions(created_by);
 CREATE INDEX IF NOT EXISTS idx_qrydfn_table ON query_definitions(source_schema, source_table);
 
+-- Add new columns for summary functions and group by (migration for existing tables)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'query_definitions' AND column_name = 'summary_functions') THEN
+        ALTER TABLE query_definitions ADD COLUMN summary_functions JSONB DEFAULT '[]';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'query_definitions' AND column_name = 'group_by_fields') THEN
+        ALTER TABLE query_definitions ADD COLUMN group_by_fields JSONB DEFAULT '[]';
+    END IF;
+END $$;
+
 -- =============================================================================
 -- Commands (AS/400 *CMD objects)
 -- Naming follows QSYS2.COMMAND_INFO pattern from IBM i

@@ -400,7 +400,7 @@ class ScreenManager:
         elif key == 'F5':
             # Screen-specific F5 handling
             if screen == 'qrydefine':
-                result = self._handle_qrydefine_fkey(session, key)
+                result = self._handle_qrydefine_fkey(session, key, fields)
                 if result:
                     return result
             return self.get_screen(session, screen)
@@ -473,7 +473,7 @@ class ScreenManager:
         elif key == 'F10':
             # Screen-specific F10 handling (Save)
             if screen == 'qrydefine':
-                result = self._handle_qrydefine_fkey(session, key)
+                result = self._handle_qrydefine_fkey(session, key, fields)
                 if result:
                     return result
         elif key == 'F12':
@@ -6144,8 +6144,16 @@ class ScreenManager:
         # No option selected, just refresh
         return self.get_screen(session, 'qrydefine')
 
-    def _handle_qrydefine_fkey(self, session: Session, key: str) -> dict:
+    def _handle_qrydefine_fkey(self, session: Session, key: str, fields: dict) -> dict:
         """Handle F-keys for qrydefine screen."""
+        # Map form fields to session state (same mapping as _submit_qrydefine)
+        if fields.get('name'):
+            session.field_values['qry_name'] = fields.get('name', '').strip().upper()
+        if fields.get('library'):
+            session.field_values['qry_library'] = fields.get('library', 'QGPL').strip().upper() or 'QGPL'
+        if fields.get('desc'):
+            session.field_values['qry_desc'] = fields.get('desc', '').strip()
+
         if key == 'F5':
             # Run query preview
             qry_schema = session.field_values.get('qry_schema')
