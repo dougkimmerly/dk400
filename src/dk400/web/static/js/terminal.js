@@ -349,6 +349,12 @@ class Terminal5250 {
             fieldValues[fieldId] = input.value;
         });
 
+        // Include the currently focused field for F4 parameter prompts
+        const activeElement = document.activeElement;
+        if (activeElement && activeElement.classList.contains('input-field')) {
+            fieldValues['_active_field'] = activeElement.dataset.fieldId || '';
+        }
+
         this.showBusy();
         this.send({
             action: 'function_key',
