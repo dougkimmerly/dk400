@@ -92,24 +92,6 @@ services:
       - dk400
     restart: unless-stopped
 
-  tui:
-    build:
-      context: .
-      dockerfile: Dockerfile.tui
-    container_name: dk400-tui
-    restart: unless-stopped
-    ports:
-      - "2222:22"
-    environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
-      TERM: xterm-256color
-    volumes:
-      - ./src:/app/src:ro
-    networks:
-      - dk400
-    stdin_open: true
-    tty: true
-
   web:
     build:
       context: .

@@ -16,7 +16,6 @@ ssh doug@192.168.20.19 "cd /home/doug/dkSRC/infrastructure/dk400 && git pull && 
 
 - **Web UI:** http://192.168.20.19:8400
 - **Flower:** http://192.168.20.19:5555
-- **SSH TUI:** `ssh -p 2222 dk400@192.168.20.19`
 
 ## Key Files
 
