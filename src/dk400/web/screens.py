@@ -278,12 +278,12 @@ class ScreenManager:
     }
 
     # Map field IDs to parameter names for F4 prompts
-    # If field ID matches parameter name (uppercase), no mapping needed
+    # Field IDs from screen definitions -> parameter names in COMMAND_PARM_INFO
     FIELD_PARM_MAP = {
-        # user_create screen
-        'usrcls': 'USRCLS',
-        'grpprf': 'GRPPRF',
-        'password': 'PASSWORD',
+        # user_create screen (CRTUSRPRF)
+        'user_class': 'USRCLS',
+        'group_profile': 'GRPPRF',
+        'new_pwd': 'PASSWORD',
         # sbmjob screen
         'jobq': 'JOBQ',
         'jobd': 'JOBD',
