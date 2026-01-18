@@ -400,7 +400,30 @@ class Terminal5250 {
 
     setupKeyboardHandler() {
         document.addEventListener('keydown', (e) => {
-            // If an input field is focused, let it handle the event
+            // Roll keys work globally (even when input focused)
+            if (e.key === 'PageUp') {
+                e.preventDefault();
+                this.handleRoll('up');
+                return;
+            }
+            if (e.key === 'PageDown') {
+                e.preventDefault();
+                this.handleRoll('down');
+                return;
+            }
+            // Cmd/Opt + Arrow for roll
+            if ((e.metaKey || e.altKey) && e.key === 'ArrowUp') {
+                e.preventDefault();
+                this.handleRoll('up');
+                return;
+            }
+            if ((e.metaKey || e.altKey) && e.key === 'ArrowDown') {
+                e.preventDefault();
+                this.handleRoll('down');
+                return;
+            }
+
+            // If an input field is focused, let it handle other events
             if (document.activeElement.classList.contains('input-field')) {
                 return;
             }
