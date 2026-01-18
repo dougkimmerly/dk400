@@ -335,35 +335,39 @@ class ScreenManager:
         return self.get_screen(session, 'wrkactjob')
 
     def _screen_dspsyssts(self, session: Session) -> dict:
-        """Display System Status - 80 columns."""
+        """Display System Status - 80 columns, compact single-screen view."""
         hostname, date_str, time_str = get_system_info()
         stats = self._get_system_stats()
 
+        # Format memory in MB for pool display
+        mem_mb = int(stats['mem_total_mb'])
+        mem_used_mb = int(stats['mem_used_mb'])
+
         content = [
-            pad_line(f"                      Display System Status                         {hostname}"),
+            pad_line(f"                       Display System Status                        {hostname}"),
             pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(f" % CPU used  . . . . . . :    {stats['cpu_pct']:5.1f}   Auxiliary storage:"),
+            pad_line(f" Elapsed time  . . . . . :  {stats['elapsed_time']}     System ASP . . . . . :    {stats['disk_pct']:5.1f} %"),
+            pad_line(f" Jobs in system  . . . . :     {stats['jobs_in_system']:4d}       Total  . . . . . . . :  {stats['disk_total_gb']:7.1f} G"),
+            pad_line(f" % perm addresses  . . . :    {stats['perm_addr_pct']:5.1f}       Used . . . . . . . . :  {stats['disk_used_gb']:7.1f} G"),
+            pad_line(f" % temp addresses  . . . :    {stats['temp_addr_pct']:5.1f}       Available  . . . . . :  {stats['disk_avail_gb']:7.1f} G"),
             pad_line(""),
-            pad_line(f" % CPU utilization  . . . . . . . . . :       {stats['cpu_pct']:5.1f}"),
-            pad_line(f" Elapsed time . . . . . . . . . . . . :   {stats['elapsed_time']}"),
-            pad_line(f" Jobs in system . . . . . . . . . . . :        {stats['jobs_in_system']:4d}"),
-            pad_line(f"   % perm addresses used  . . . . . . :       {stats['perm_addr_pct']:5.1f}"),
-            pad_line(f"   % temp addresses used  . . . . . . :       {stats['temp_addr_pct']:5.1f}"),
+            pad_line(f" Main storage (MB): {mem_mb:>6}   Used: {mem_used_mb:>6}   % used: {stats['mem_pct']:5.1f}"),
             pad_line(""),
-            pad_line(f" Total auxiliary storage (GB) . . . . :   {stats['disk_total_gb']:8.1f}"),
-            pad_line(f"   Auxiliary storage used (GB)  . . . :   {stats['disk_used_gb']:8.1f}"),
-            pad_line(f"   Auxiliary storage available (GB) . :   {stats['disk_avail_gb']:8.1f}"),
-            pad_line(f"   % auxiliary storage used . . . . . :       {stats['disk_pct']:5.1f}"),
+            [{"type": "text", "text": pad_line(" Pool  Subsystem   Size(M)  Defined  Max Act  ++Act  ++Wait  ++Fault"), "class": "field-highlight"}],
+            pad_line(f"   1   *MACHINE     {stats['machine_pool']:5}    {stats['machine_pool']:5}      +++   {stats['machine_act']:4}       0       0"),
+            pad_line(f"   2   *BASE        {stats['base_pool']:5}    {stats['base_pool']:5}      +++   {stats['base_act']:4}       0       0"),
+            pad_line(f"   3   *INTERACT    {stats['interact_pool']:5}    {stats['interact_pool']:5}      +++   {stats['interact_act']:4}       0       0"),
+            pad_line(f"   4   *SPOOL        {stats['spool_pool']:4}     {stats['spool_pool']:4}      +++     {stats['spool_act']:2}       0       0"),
             pad_line(""),
-            pad_line(f" Current processing capacity  . . . . :       {stats['cpu_count']:5.2f}"),
-            pad_line(f" Processing capacity used . . . . . . :       {stats['cpu_used']:5.2f}"),
-            pad_line(f" Total main storage (MB)  . . . . . . :   {stats['mem_total_mb']:8.1f}"),
-            pad_line(f"   Main storage used (MB) . . . . . . :   {stats['mem_used_mb']:8.1f}"),
-            pad_line(f"   Main storage available (MB)  . . . :   {stats['mem_avail_mb']:8.1f}"),
-            pad_line(f"   % main storage used  . . . . . . . :       {stats['mem_pct']:5.1f}"),
+            [{"type": "text", "text": pad_line(" Subsystem    Status     Jobs  Type    Library"), "class": "field-highlight"}],
+            pad_line(f" QBATCH       ACTIVE    {stats['celery_active']:4}   SBS     QSYS"),
+            pad_line(f" QINTER       ACTIVE    {stats['docker_containers']:4}   SBS     QSYS"),
+            pad_line(f" QSPL         ACTIVE       1   SBS     QSYS"),
+            pad_line(f" QCTL         ACTIVE       1   SBS     QSYS"),
             pad_line(""),
-            pad_line(f" System ASP . . . . . . . . . . . . . :   {stats['asp_util']:8.1f} %"),
-            pad_line(f" Total # of disk units  . . . . . . . :          {stats['disk_units']:2d}"),
-            pad_line("                                                              More..."),
+            pad_line(" F3=Exit   F5=Refresh   F12=Cancel"),
+            pad_line(""),
         ]
 
         return {
