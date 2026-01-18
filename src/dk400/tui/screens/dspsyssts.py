@@ -7,11 +7,10 @@ from textual.app import ComposeResult
 from textual.screen import Screen
 from textual.widgets import Header, Footer, Static
 from textual.binding import Binding
-from textual.containers import Vertical
 from datetime import datetime, timedelta
 from typing import Any
 import os
-import subprocess
+import socket
 
 # Celery imports
 from celery import Celery
@@ -28,33 +27,35 @@ def get_system_stats() -> dict[str, Any]:
     """Gather system statistics."""
     stats = {
         'cpu_pct': 0.0,
-        'memory_total': 0,
-        'memory_used': 0,
+        'memory_total_mb': 0,
+        'memory_used_mb': 0,
         'memory_pct': 0.0,
-        'disk_total': 0,
-        'disk_used': 0,
+        'disk_total_mb': 0,
+        'disk_used_mb': 0,
         'disk_pct': 0.0,
-        'uptime': '0d 0h 0m',
-        'load_1': 0.0,
-        'load_5': 0.0,
-        'load_15': 0.0,
-        'processes': 0,
+        'elapsed_time': '00:00:00',
+        'uptime_seconds': 0,
+        'jobs_in_system': 0,
+        'jobs_active': 0,
+        'jobs_waiting': 0,
         'celery_workers': 0,
         'celery_active': 0,
-        'celery_scheduled': 0,
         'celery_reserved': 0,
+        'db_capability': 0.0,
+        'cpu_count': 1,
     }
 
     try:
-        # CPU - read from /proc/stat or use load average as proxy
+        stats['cpu_count'] = os.cpu_count() or 1
+    except Exception:
+        pass
+
+    try:
+        # CPU - read load average
         with open('/proc/loadavg', 'r') as f:
             loadavg = f.read().split()
-            stats['load_1'] = float(loadavg[0])
-            stats['load_5'] = float(loadavg[1])
-            stats['load_15'] = float(loadavg[2])
-            # Estimate CPU% from 1-min load (rough approximation)
-            cpu_count = os.cpu_count() or 1
-            stats['cpu_pct'] = min(100.0, (stats['load_1'] / cpu_count) * 100)
+            load_1 = float(loadavg[0])
+            stats['cpu_pct'] = min(100.0, (load_1 / stats['cpu_count']) * 100)
     except Exception:
         pass
 
@@ -73,8 +74,8 @@ def get_system_stats() -> dict[str, Any]:
             available = meminfo.get('MemAvailable', 0)
             used = total - available
 
-            stats['memory_total'] = total // 1024  # MB
-            stats['memory_used'] = used // 1024  # MB
+            stats['memory_total_mb'] = total // 1024
+            stats['memory_used_mb'] = used // 1024
             stats['memory_pct'] = (used / total * 100) if total > 0 else 0
     except Exception:
         pass
@@ -86,27 +87,45 @@ def get_system_stats() -> dict[str, Any]:
         free = statvfs.f_bfree * statvfs.f_frsize
         used = total - free
 
-        stats['disk_total'] = total // (1024 ** 3)  # GB
-        stats['disk_used'] = used // (1024 ** 3)  # GB
+        stats['disk_total_mb'] = total // (1024 * 1024)
+        stats['disk_used_mb'] = used // (1024 * 1024)
         stats['disk_pct'] = (used / total * 100) if total > 0 else 0
     except Exception:
         pass
 
     try:
-        # Uptime - read from /proc/uptime
+        # Uptime and elapsed time
         with open('/proc/uptime', 'r') as f:
             uptime_seconds = float(f.read().split()[0])
-            uptime_td = timedelta(seconds=int(uptime_seconds))
-            days = uptime_td.days
-            hours = uptime_td.seconds // 3600
-            minutes = (uptime_td.seconds % 3600) // 60
-            stats['uptime'] = f"{days}d {hours}h {minutes}m"
+            stats['uptime_seconds'] = int(uptime_seconds)
+            hours = int(uptime_seconds) // 3600
+            minutes = (int(uptime_seconds) % 3600) // 60
+            seconds = int(uptime_seconds) % 60
+            stats['elapsed_time'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     except Exception:
         pass
 
     try:
-        # Process count
-        stats['processes'] = len([p for p in os.listdir('/proc') if p.isdigit()])
+        # Process/Job counts
+        procs = [p for p in os.listdir('/proc') if p.isdigit()]
+        stats['jobs_in_system'] = len(procs)
+
+        # Count running vs sleeping
+        running = 0
+        sleeping = 0
+        for pid in procs[:100]:  # Sample first 100 to avoid slowdown
+            try:
+                with open(f'/proc/{pid}/stat', 'r') as f:
+                    state = f.read().split()[2]
+                    if state == 'R':
+                        running += 1
+                    elif state in ('S', 'D'):
+                        sleeping += 1
+            except Exception:
+                pass
+
+        stats['jobs_active'] = running
+        stats['jobs_waiting'] = sleeping
     except Exception:
         pass
 
@@ -115,33 +134,22 @@ def get_system_stats() -> dict[str, Any]:
         app = get_celery_app()
         inspect = app.control.inspect()
 
-        # Worker count
         ping_result = inspect.ping() or {}
         stats['celery_workers'] = len(ping_result)
 
-        # Active tasks
         active = inspect.active() or {}
         stats['celery_active'] = sum(len(tasks) for tasks in active.values())
 
-        # Reserved tasks
         reserved = inspect.reserved() or {}
         stats['celery_reserved'] = sum(len(tasks) for tasks in reserved.values())
-
-        # Scheduled tasks
-        scheduled = inspect.scheduled() or {}
-        stats['celery_scheduled'] = sum(len(tasks) for tasks in scheduled.values())
 
     except Exception:
         pass
 
+    # DB capability - fake it based on memory
+    stats['db_capability'] = min(100.0, stats['memory_pct'] * 0.3)
+
     return stats
-
-
-def format_bytes_display(mb: int) -> str:
-    """Format memory in appropriate units."""
-    if mb >= 1024:
-        return f"{mb / 1024:.1f} GB"
-    return f"{mb} MB"
 
 
 class DspSysStsScreen(Screen):
@@ -183,58 +191,59 @@ class DspSysStsScreen(Screen):
         yield Footer()
 
     def _get_status_text(self) -> str:
-        """Generate the system status display."""
+        """Generate the system status display in traditional AS/400 format."""
         timestamp = datetime.now().strftime("%m/%d/%y  %H:%M:%S")
-        user = getattr(self.app, 'current_user', 'QUSER')
+        hostname = socket.gethostname().upper()[:10]
         stats = get_system_stats()
 
-        # Create ASCII progress bars
-        cpu_bar = self._make_bar(stats['cpu_pct'])
-        mem_bar = self._make_bar(stats['memory_pct'])
-        disk_bar = self._make_bar(stats['disk_pct'])
+        # Calculate pool sizes (fake AS/400-style pools from Linux memory)
+        total_mb = stats['memory_total_mb']
+        machine_pool = int(total_mb * 0.10)  # 10% for kernel
+        base_pool = int(total_mb * 0.50)     # 50% for base
+        interact_pool = int(total_mb * 0.30) # 30% for interactive
+        spool_pool = int(total_mb * 0.10)    # 10% for spool
 
-        return f"""
-                           Display System Status                      {user}
-                                                          {timestamp}
+        # Activity levels (fake based on CPU)
+        cpu = stats['cpu_pct']
+        machine_act = min(cpu * 0.3, 100)
+        base_act = min(cpu * 0.5, 100)
+        interact_act = min(cpu * 0.15, 100)
+        spool_act = min(cpu * 0.05, 100)
 
-  System:   DK400          Uptime:  {stats['uptime']}
+        return f""" {hostname}                  Display System Status                    {timestamp}
 
-  ─────────────────────────────────────────────────────────────────────────
+ % CPU utilization . . . . . . . :    {stats['cpu_pct']:5.1f}
+ Elapsed time  . . . . . . . . . :  {stats['elapsed_time']}
+ Jobs in system  . . . . . . . . :    {stats['jobs_in_system']:5d}
+ % perm addresses used . . . . . :     {stats['memory_pct'] * 0.1:4.1f}
+ % temp addresses used . . . . . :     {stats['memory_pct'] * 0.05:4.1f}
 
-  CPU RESOURCES:
-    CPU utilization  . . . . . . . :   {stats['cpu_pct']:5.1f} %   {cpu_bar}
-    Load average (1/5/15 min)  . . :   {stats['load_1']:.2f} / {stats['load_5']:.2f} / {stats['load_15']:.2f}
+ % system ASP used . . . . . . . :    {stats['disk_pct']:5.1f}
+ Total aux storage (M) . . . . . :  {stats['disk_total_mb']:7d}
 
-  MEMORY RESOURCES:
-    Total memory . . . . . . . . . :   {format_bytes_display(stats['memory_total'])}
-    Memory used  . . . . . . . . . :   {format_bytes_display(stats['memory_used'])}
-    Memory utilization . . . . . . :   {stats['memory_pct']:5.1f} %   {mem_bar}
+ % DB capability . . . . . . . . :    {stats['db_capability']:5.1f}
+ % current processing capacity . :    {100.0:5.1f}
+ Processing units available  . . :    {stats['cpu_count']:5d}.00
 
-  DISK RESOURCES:
-    Total disk space . . . . . . . :   {stats['disk_total']} GB
-    Disk space used  . . . . . . . :   {stats['disk_used']} GB
-    Disk utilization . . . . . . . :   {stats['disk_pct']:5.1f} %   {disk_bar}
+           --------Transition---------
+ Pool      Reserved    Max    Allocated   Defined      Pool
+           Size        Active               Size    ------------ Subsystem -------------
+ *MACHINE       {machine_pool:5d}      ++     {int(machine_act):4d}      {machine_pool:5d}    Machine pool
+ *BASE          {base_pool:5d}      ++     {int(base_act):4d}      {base_pool:5d}    QBATCH QINTER QSPL
+ *INTERACT      {interact_pool:5d}      ++     {int(interact_act):4d}      {interact_pool:5d}    Interactive jobs
+ *SPOOL         {spool_pool:5d}      ++     {int(spool_act):4d}      {spool_pool:5d}    Spooled files
 
-  ─────────────────────────────────────────────────────────────────────────
-
-  JOB QUEUE STATUS (QBATCH):
-    Active workers . . . . . . . . :   {stats['celery_workers']}
-    Jobs running . . . . . . . . . :   {stats['celery_active']}
-    Jobs on queue  . . . . . . . . :   {stats['celery_reserved']}
-    Jobs scheduled . . . . . . . . :   {stats['celery_scheduled']}
-
-  SYSTEM ACTIVITY:
-    Active processes . . . . . . . :   {stats['processes']}
+                                  -------Jobs--------
+ Subsystem      Subsystem   Active   Wait   Wait      Pool
+ Name           Status      Jobs     Msg    Job       Name
+ QBATCH         ACTIVE        {stats['celery_active']:4d}      0      {stats['celery_reserved']:3d}    *BASE
+ QINTER         ACTIVE        {stats['jobs_active']:4d}      0        0    *INTERACT
+ QSPL           ACTIVE           0      0        0    *SPOOL
+ QCTL           ACTIVE           1      0        0    *MACHINE
 
 
-                                                      Press F5 to refresh
-"""
-
-    def _make_bar(self, pct: float, width: int = 20) -> str:
-        """Create an ASCII progress bar."""
-        filled = int((pct / 100) * width)
-        empty = width - filled
-        return f"[{'█' * filled}{'░' * empty}]"
+                                                                          Bottom
+ F3=Exit   F5=Refresh   F12=Cancel"""
 
     def on_mount(self) -> None:
         """Refresh on mount."""
