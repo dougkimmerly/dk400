@@ -5857,7 +5857,7 @@ class ScreenManager:
         ])
         fields.append({"id": "cmd"})
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
