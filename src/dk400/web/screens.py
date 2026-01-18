@@ -63,6 +63,12 @@ from src.dk400.web.database import (
     # Library List (*LIBL support)
     get_user_library_list, get_user_current_library,
     resolve_library, resolve_library_for_create,
+    # Journaling
+    create_journal, get_journal, list_journals, delete_journal, change_journal,
+    create_journal_receiver, get_journal_receiver, list_journal_receivers,
+    attach_journal_receiver, detach_journal_receiver,
+    start_journal_pf, end_journal_pf, list_journaled_files,
+    get_journal_entries, get_journal_entry, count_journal_entries,
     # Database utilities
     get_cursor,
 )
@@ -226,6 +232,14 @@ class ScreenManager:
         'WRKQRY': 'wrkqry',
         'STRQRY': 'wrkqry',  # AS/400 alias
         'RUNQRY': 'qryrun',
+        # Journaling
+        'WRKJRN': 'wrkjrn',
+        'DSPJRN': 'dspjrn',
+        'CRTJRN': 'crtjrn',
+        'CRTJRNRCV': 'crtjrnrcv',
+        'STRJRNPF': 'strjrnpf',
+        'ENDJRNPF': 'endjrnpf',
+        'WRKJRNRCV': 'wrkjrnrcv',
         'SIGNOFF': 'signon',
         'GO': 'main',
         '1': 'wrkactjob',
@@ -295,6 +309,13 @@ class ScreenManager:
         'WRKSBSD': 'Work with Subsystem Descriptions',
         'STRSBS': 'Start Subsystem',
         'ENDSBS': 'End Subsystem',
+        'WRKJRN': 'Work with Journals',
+        'DSPJRN': 'Display Journal',
+        'CRTJRN': 'Create Journal',
+        'CRTJRNRCV': 'Create Journal Receiver',
+        'STRJRNPF': 'Start Journal Physical File',
+        'ENDJRNPF': 'End Journal Physical File',
+        'WRKJRNRCV': 'Work with Journal Receivers',
         'SIGNOFF': 'Sign Off',
         'GO': 'Go to Main Menu',
     }
@@ -654,6 +675,10 @@ class ScreenManager:
         # Library screens
         'wrklib': 12,
         'wrkobj': 12,
+        # Journal screens
+        'wrkjrn': 12,
+        'dspjrn': 14,
+        'wrkjrnrcv': 12,
     }
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
@@ -8839,3 +8864,766 @@ class ScreenManager:
             "fields": [],
             "activeField": 0,
         }
+
+    # ========================================
+    # JOURNALING SCREENS (AS/400-style *JRN/*JRNRCV)
+    # ========================================
+
+    def _screen_wrkjrn(self, session: Session) -> dict:
+        """Work with Journals screen."""
+        hostname, date_str, time_str = get_system_info()
+        journals = list_journals()
+
+        offset = session.get_offset('wrkjrn')
+        page_size = 12
+
+        content = [
+            pad_line(f" {hostname:<20}         Work with Journals                  {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Change   4=Delete   5=Display   8=Work with receivers"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Journal    Library    Status     Receiver   Entries    "), "class": "field-reverse"}],
+        ]
+
+        fields = []
+
+        # List existing journals
+        page_journals = journals[offset:offset + page_size]
+        for i, jrn in enumerate(page_journals):
+            entries = jrn.get('total_entries', 0)
+            entries_str = f"{entries:>10,}" if entries else "         0"
+            receiver = jrn.get('current_receiver', '') or ''
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {jrn['name']:<10} {jrn['library']:<10} {jrn['status']:<10} {receiver:<10} {entries_str}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        # Pad to fill screen
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        more = "More..." if len(journals) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrkjrn",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_wrkjrn(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Journals submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        journals = list_journals()
+        offset = session.get_offset('wrkjrn')
+        page_size = 12
+        page_journals = journals[offset:offset + page_size]
+
+        for i, jrn in enumerate(page_journals):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if not opt:
+                continue
+
+            if opt == '2':
+                # Change journal - go to prompt
+                session.context['jrn_name'] = jrn['name']
+                session.context['jrn_library'] = jrn['library']
+                return self.get_screen(session, 'chgjrn')
+            elif opt == '4':
+                # Delete journal
+                success, msg = delete_journal(jrn['name'], jrn['library'])
+                session.message = msg
+                session.message_level = "info" if success else "error"
+                return self.get_screen(session, 'wrkjrn')
+            elif opt == '5':
+                # Display journal detail
+                session.context['jrn_name'] = jrn['name']
+                session.context['jrn_library'] = jrn['library']
+                return self.get_screen(session, 'dspjrn')
+            elif opt == '8':
+                # Work with receivers for this journal
+                session.context['jrn_name'] = jrn['name']
+                session.context['jrn_library'] = jrn['library']
+                return self.get_screen(session, 'wrkjrnrcv')
+
+        return self.get_screen(session, 'wrkjrn')
+
+    def _screen_dspjrn(self, session: Session) -> dict:
+        """Display Journal entries screen (DSPJRN)."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Get journal from context or prompt
+        jrn_name = session.context.get('jrn_name', '')
+        jrn_lib = session.context.get('jrn_library', 'QGPL')
+
+        if not jrn_name:
+            # Show prompt to enter journal
+            return self._screen_dspjrn_prompt(session)
+
+        jrn = get_journal(jrn_name, jrn_lib)
+        if not jrn:
+            session.message = f"Journal {jrn_lib}/{jrn_name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkjrn')
+
+        receiver = jrn.get('current_receiver', '') or ''
+        entries = get_journal_entries(journal=jrn_name, library=jrn_lib, limit=100)
+
+        offset = session.get_offset('dspjrn')
+        page_size = 14
+
+        content = [
+            pad_line(f" {hostname:<20}          Display Journal                    {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Journal: {jrn_name:<10}  Library: {jrn_lib:<10}  Receiver: {receiver:<10}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   5=Display entry detail"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Seq#     Code Typ Object      Schema     User       Time    "), "class": "field-reverse"}],
+        ]
+
+        fields = []
+        page_entries = entries[offset:offset + page_size]
+
+        for i, entry in enumerate(page_entries):
+            seq = entry.get('id', 0)
+            code = entry.get('journal_code', 'F')
+            etype = entry.get('entry_type', '')
+            obj = (entry.get('object_name', '') or '')[:10]
+            schema = (entry.get('object_schema', '') or '')[:10]
+            user = (entry.get('job_user', '') or '')[:10]
+            etime = entry.get('entry_time')
+            time_fmt = etime.strftime('%H:%M:%S') if etime else ''
+
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {seq:>8} {code:>4} {etype:<3} {obj:<11} {schema:<10} {user:<10} {time_fmt}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        # Pad to fill screen
+        while len(content) < 22:
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        more = "More..." if len(entries) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  F17=Subset"))
+
+        return {
+            "type": "screen",
+            "screen": "dspjrn",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _screen_dspjrn_prompt(self, session: Session) -> dict:
+        """Display Journal prompt screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}          Display Journal (DSPJRN)           {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": "   Journal  . . . . . . .   "},
+                {"type": "input", "id": "journal", "width": 10, "class": "field-input"},
+                {"type": "text", "text": "       Name"},
+            ],
+            [
+                {"type": "text", "text": "     Library  . . . . . .     "},
+                {"type": "input", "id": "library", "width": 10, "value": "QGPL", "class": "field-input"},
+            ],
+        ]
+
+        # Pad to fill screen
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F4=Prompt  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "dspjrn_prompt",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "journal"}, {"id": "library"}],
+            "activeField": 0,
+        }
+
+    def _submit_dspjrn_prompt(self, session: Session, fields: dict) -> dict:
+        """Handle Display Journal prompt submission."""
+        journal = fields.get('journal', '').strip().upper()
+        library = fields.get('library', 'QGPL').strip().upper() or 'QGPL'
+
+        if not journal:
+            session.message = "Journal name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'dspjrn_prompt')
+
+        session.context['jrn_name'] = journal
+        session.context['jrn_library'] = library
+        return self.get_screen(session, 'dspjrn')
+
+    def _submit_dspjrn(self, session: Session, fields: dict) -> dict:
+        """Handle Display Journal submission."""
+        jrn_name = session.context.get('jrn_name', '')
+        jrn_lib = session.context.get('jrn_library', 'QGPL')
+
+        entries = get_journal_entries(journal=jrn_name, library=jrn_lib, limit=100)
+        offset = session.get_offset('dspjrn')
+        page_size = 14
+        page_entries = entries[offset:offset + page_size]
+
+        for i, entry in enumerate(page_entries):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if not opt:
+                continue
+
+            if opt == '5':
+                # Display entry detail
+                session.context['jrne_id'] = entry['id']
+                return self.get_screen(session, 'jrnedetail')
+
+        return self.get_screen(session, 'dspjrn')
+
+    def _screen_jrnedetail(self, session: Session) -> dict:
+        """Display Journal Entry detail screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        entry_id = session.context.get('jrne_id')
+        if not entry_id:
+            session.message = "No entry selected"
+            return self.get_screen(session, 'dspjrn')
+
+        entry = get_journal_entry(entry_id)
+        if not entry:
+            session.message = f"Entry {entry_id} not found"
+            return self.get_screen(session, 'dspjrn')
+
+        # Entry type descriptions
+        type_desc = {
+            'PT': 'Record Added (Put)',
+            'UP': 'Record Updated (After)',
+            'UB': 'Record Updated (Before)',
+            'DL': 'Record Deleted',
+        }
+        etype = entry.get('entry_type', '')
+        etype_text = type_desc.get(etype, etype)
+
+        etime = entry.get('entry_time')
+        time_str_entry = etime.strftime('%Y-%m-%d %H:%M:%S') if etime else ''
+
+        content = [
+            pad_line(f" {hostname:<20}       Display Journal Entry                 {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Sequence: {entry['id']:<15}            Entry Type: {etype} ({etype_text})"),
+            pad_line(f" Receiver: {entry['receiver_name']:<10}  Library: {entry['receiver_library']:<10}"),
+            pad_line(f" Object: {entry.get('object_name', ''):<12}  Schema: {entry.get('object_schema', ''):<10}  Time: {time_str_entry}"),
+            pad_line(""),
+            pad_line(f" User: {entry.get('job_user', ''):<12}   Job: {entry.get('job_name', ''):<15}   Program: {entry.get('program_name', '')}"),
+            pad_line(""),
+        ]
+
+        # Display before or after image based on entry type
+        if etype in ('UB', 'DL') and entry.get('before_image'):
+            content.append(pad_line(" Before Image (Record Data):"))
+            content.append(pad_line(" +" + "-" * 70 + "+"))
+            img = entry['before_image']
+            for key, value in list(img.items())[:8]:  # Limit display
+                line = f" | {key}: {value}"
+                content.append(pad_line(line[:72].ljust(72) + "|"))
+            content.append(pad_line(" +" + "-" * 70 + "+"))
+        elif entry.get('after_image'):
+            content.append(pad_line(" After Image (Record Data):"))
+            content.append(pad_line(" +" + "-" * 70 + "+"))
+            img = entry['after_image']
+            for key, value in list(img.items())[:8]:  # Limit display
+                line = f" | {key}: {value}"
+                content.append(pad_line(line[:72].ljust(72) + "|"))
+            content.append(pad_line(" +" + "-" * 70 + "+"))
+
+        # Pad to fill screen
+        while len(content) < 22:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F12=Cancel  F10=View Before/After Image"))
+
+        return {
+            "type": "screen",
+            "screen": "jrnedetail",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
+    def _screen_crtjrn(self, session: Session) -> dict:
+        """Create Journal prompt screen (CRTJRN)."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}          Create Journal (CRTJRN)            {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": "   Journal  . . . . . . .   "},
+                {"type": "input", "id": "name", "width": 10, "class": "field-input"},
+                {"type": "text", "text": "       Name"},
+            ],
+            [
+                {"type": "text", "text": "     Library  . . . . . .     "},
+                {"type": "input", "id": "library", "width": 10, "value": "QGPL", "class": "field-input"},
+            ],
+            pad_line(""),
+            [
+                {"type": "text", "text": "   Journal receiver . . .   "},
+                {"type": "input", "id": "receiver", "width": 10, "class": "field-input"},
+                {"type": "text", "text": "       Name (optional)"},
+            ],
+            pad_line(""),
+            [
+                {"type": "text", "text": "   Images . . . . . . . .   "},
+                {"type": "input", "id": "images", "width": 10, "value": "*AFTER", "class": "field-input"},
+                {"type": "text", "text": "   *AFTER, *BOTH"},
+            ],
+            pad_line(""),
+            [
+                {"type": "text", "text": "   Text . . . . . . . . .   "},
+                {"type": "input", "id": "text", "width": 40, "class": "field-input"},
+            ],
+        ]
+
+        # Pad to fill screen
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "crtjrn",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "name"}, {"id": "library"}, {"id": "receiver"}, {"id": "images"}, {"id": "text"}],
+            "activeField": 0,
+        }
+
+    def _submit_crtjrn(self, session: Session, fields: dict) -> dict:
+        """Handle Create Journal submission."""
+        name = fields.get('name', '').strip().upper()
+        library = fields.get('library', 'QGPL').strip().upper() or 'QGPL'
+        receiver = fields.get('receiver', '').strip().upper() or None
+        images = fields.get('images', '*AFTER').strip().upper() or '*AFTER'
+        text = fields.get('text', '').strip()
+
+        if not name:
+            session.message = "Journal name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'crtjrn')
+
+        success, msg = create_journal(name, library, receiver=receiver, images=images,
+                                       text=text, created_by=session.user)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkjrn')
+        return self.get_screen(session, 'crtjrn')
+
+    def _screen_crtjrnrcv(self, session: Session) -> dict:
+        """Create Journal Receiver prompt screen (CRTJRNRCV)."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}       Create Journal Receiver (CRTJRNRCV)   {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": "   Journal receiver . . .   "},
+                {"type": "input", "id": "name", "width": 10, "class": "field-input"},
+                {"type": "text", "text": "       Name"},
+            ],
+            [
+                {"type": "text", "text": "     Library  . . . . . .     "},
+                {"type": "input", "id": "library", "width": 10, "value": "QGPL", "class": "field-input"},
+            ],
+            pad_line(""),
+            [
+                {"type": "text", "text": "   For journal  . . . . .   "},
+                {"type": "input", "id": "journal", "width": 10, "class": "field-input"},
+                {"type": "text", "text": "       Name (optional)"},
+            ],
+            [
+                {"type": "text", "text": "     Library  . . . . . .     "},
+                {"type": "input", "id": "jrnlib", "width": 10, "class": "field-input"},
+            ],
+            pad_line(""),
+            [
+                {"type": "text", "text": "   Text . . . . . . . . .   "},
+                {"type": "input", "id": "text", "width": 40, "class": "field-input"},
+            ],
+        ]
+
+        # Pad to fill screen
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "crtjrnrcv",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "name"}, {"id": "library"}, {"id": "journal"}, {"id": "jrnlib"}, {"id": "text"}],
+            "activeField": 0,
+        }
+
+    def _submit_crtjrnrcv(self, session: Session, fields: dict) -> dict:
+        """Handle Create Journal Receiver submission."""
+        name = fields.get('name', '').strip().upper()
+        library = fields.get('library', 'QGPL').strip().upper() or 'QGPL'
+        journal = fields.get('journal', '').strip().upper() or None
+        jrnlib = fields.get('jrnlib', '').strip().upper() or None
+        text = fields.get('text', '').strip()
+
+        if not name:
+            session.message = "Journal receiver name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'crtjrnrcv')
+
+        success, msg = create_journal_receiver(name, library, journal=journal,
+                                                journal_lib=jrnlib, text=text,
+                                                created_by=session.user)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkjrn')
+        return self.get_screen(session, 'crtjrnrcv')
+
+    def _screen_wrkjrnrcv(self, session: Session) -> dict:
+        """Work with Journal Receivers screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        jrn_name = session.context.get('jrn_name', '')
+        jrn_lib = session.context.get('jrn_library', 'QGPL')
+
+        if jrn_name:
+            receivers = list_journal_receivers(journal=jrn_name, library=jrn_lib)
+            title = f"Work with Journal Receivers - {jrn_lib}/{jrn_name}"
+        else:
+            receivers = list_journal_receivers()
+            title = "Work with Journal Receivers"
+
+        offset = session.get_offset('wrkjrnrcv')
+        page_size = 12
+
+        content = [
+            pad_line(f" {hostname:<20}  {title:<35} {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Attach   4=Detach   5=Display"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Receiver   Library    Journal    Status      Entries    "), "class": "field-reverse"}],
+        ]
+
+        fields = []
+        page_receivers = receivers[offset:offset + page_size]
+
+        for i, rcv in enumerate(page_receivers):
+            entries = rcv.get('entry_count', 0)
+            entries_str = f"{entries:>10,}" if entries else "         0"
+            jrn = rcv.get('journal_name', '') or ''
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {rcv['name']:<10} {rcv['library']:<10} {jrn:<10} {rcv['status']:<11} {entries_str}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        # Pad to fill screen
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        more = "More..." if len(receivers) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrkjrnrcv",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_wrkjrnrcv(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Journal Receivers submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        jrn_name = session.context.get('jrn_name', '')
+        jrn_lib = session.context.get('jrn_library', 'QGPL')
+
+        if jrn_name:
+            receivers = list_journal_receivers(journal=jrn_name, library=jrn_lib)
+        else:
+            receivers = list_journal_receivers()
+
+        offset = session.get_offset('wrkjrnrcv')
+        page_size = 12
+        page_receivers = receivers[offset:offset + page_size]
+
+        for i, rcv in enumerate(page_receivers):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if not opt:
+                continue
+
+            if opt == '2':
+                # Attach receiver to journal
+                if jrn_name:
+                    success, msg = attach_journal_receiver(jrn_name, jrn_lib,
+                                                           rcv['name'], rcv['library'])
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                else:
+                    session.message = "No journal selected - use option 2 from WRKJRN"
+                    session.message_level = "error"
+                return self.get_screen(session, 'wrkjrnrcv')
+            elif opt == '4':
+                # Detach receiver
+                if rcv.get('journal_name'):
+                    success, msg = detach_journal_receiver(rcv['journal_name'],
+                                                           rcv['journal_library'])
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                else:
+                    session.message = "Receiver is not attached to any journal"
+                    session.message_level = "error"
+                return self.get_screen(session, 'wrkjrnrcv')
+            elif opt == '5':
+                # Display receiver detail
+                session.context['rcv_name'] = rcv['name']
+                session.context['rcv_library'] = rcv['library']
+                return self.get_screen(session, 'dspjrnrcv')
+
+        return self.get_screen(session, 'wrkjrnrcv')
+
+    def _screen_strjrnpf(self, session: Session) -> dict:
+        """Start Journal Physical File prompt screen (STRJRNPF)."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}     Start Journal Physical File (STRJRNPF) {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": "   File . . . . . . . . .   "},
+                {"type": "input", "id": "table", "width": 20, "class": "field-input"},
+                {"type": "text", "text": "   Table name"},
+            ],
+            [
+                {"type": "text", "text": "     Library  . . . . . .     "},
+                {"type": "input", "id": "schema", "width": 20, "class": "field-input"},
+                {"type": "text", "text": " Schema"},
+            ],
+            pad_line(""),
+            [
+                {"type": "text", "text": "   Journal  . . . . . . .   "},
+                {"type": "input", "id": "journal", "width": 10, "class": "field-input"},
+                {"type": "text", "text": "       Name"},
+            ],
+            [
+                {"type": "text", "text": "     Library  . . . . . .     "},
+                {"type": "input", "id": "jrnlib", "width": 10, "value": "QGPL", "class": "field-input"},
+            ],
+            pad_line(""),
+            [
+                {"type": "text", "text": "   Images . . . . . . . .   "},
+                {"type": "input", "id": "images", "width": 10, "value": "*AFTER", "class": "field-input"},
+                {"type": "text", "text": "   *AFTER, *BOTH"},
+            ],
+        ]
+
+        # Pad to fill screen
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "strjrnpf",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "table"}, {"id": "schema"}, {"id": "journal"}, {"id": "jrnlib"}, {"id": "images"}],
+            "activeField": 0,
+        }
+
+    def _submit_strjrnpf(self, session: Session, fields: dict) -> dict:
+        """Handle Start Journal Physical File submission."""
+        table = fields.get('table', '').strip().lower()
+        schema = fields.get('schema', '').strip().lower()
+        journal = fields.get('journal', '').strip().upper()
+        jrnlib = fields.get('jrnlib', 'QGPL').strip().upper() or 'QGPL'
+        images = fields.get('images', '*AFTER').strip().upper() or '*AFTER'
+
+        if not table or not schema:
+            session.message = "Table and schema are required"
+            session.message_level = "error"
+            return self.get_screen(session, 'strjrnpf')
+
+        if not journal:
+            session.message = "Journal name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'strjrnpf')
+
+        success, msg = start_journal_pf(schema, table, journal, jrnlib,
+                                         images=images, started_by=session.user)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkjrn')
+        return self.get_screen(session, 'strjrnpf')
+
+    def _screen_endjrnpf(self, session: Session) -> dict:
+        """End Journal Physical File prompt screen (ENDJRNPF)."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}      End Journal Physical File (ENDJRNPF)  {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": "   File . . . . . . . . .   "},
+                {"type": "input", "id": "table", "width": 20, "class": "field-input"},
+                {"type": "text", "text": "   Table name"},
+            ],
+            [
+                {"type": "text", "text": "     Library  . . . . . .     "},
+                {"type": "input", "id": "schema", "width": 20, "class": "field-input"},
+                {"type": "text", "text": " Schema"},
+            ],
+        ]
+
+        # Pad to fill screen
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "endjrnpf",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "table"}, {"id": "schema"}],
+            "activeField": 0,
+        }
+
+    def _submit_endjrnpf(self, session: Session, fields: dict) -> dict:
+        """Handle End Journal Physical File submission."""
+        table = fields.get('table', '').strip().lower()
+        schema = fields.get('schema', '').strip().lower()
+
+        if not table or not schema:
+            session.message = "Table and schema are required"
+            session.message_level = "error"
+            return self.get_screen(session, 'endjrnpf')
+
+        success, msg = end_journal_pf(schema, table)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkjrn')
+        return self.get_screen(session, 'endjrnpf')

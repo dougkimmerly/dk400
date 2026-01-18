@@ -203,6 +203,90 @@ CREATE TABLE IF NOT EXISTS qsys._prmval (
 CREATE INDEX IF NOT EXISTS idx_prmval_ord ON qsys._prmval(command_name, parm_name, ordinal_position);
 
 -- =============================================================================
+-- Journaling Tables (AS/400 Journal/Receiver System)
+-- =============================================================================
+
+-- Journals (*JRN objects)
+CREATE TABLE IF NOT EXISTS qsys._jrn (
+    name VARCHAR(10) NOT NULL,
+    library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    text VARCHAR(50) DEFAULT '',
+    status VARCHAR(10) DEFAULT '*ACTIVE',       -- *ACTIVE, *INACTIVE
+    images VARCHAR(10) DEFAULT '*AFTER',        -- *AFTER, *BOTH
+    current_receiver VARCHAR(10),               -- Currently attached receiver
+    total_entries BIGINT DEFAULT 0,
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (name, library)
+);
+
+-- Journal Receivers (*JRNRCV objects)
+CREATE TABLE IF NOT EXISTS qsys._jrnrcv (
+    name VARCHAR(10) NOT NULL,
+    library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    journal_name VARCHAR(10) NOT NULL,
+    journal_library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    text VARCHAR(50) DEFAULT '',
+    status VARCHAR(10) DEFAULT '*ATTACHED',     -- *ATTACHED, *DETACHED, *SAVED
+    sequence INTEGER DEFAULT 1,                 -- Receiver chain sequence
+    first_entry BIGINT,                         -- First entry sequence in receiver
+    last_entry BIGINT,                          -- Last entry sequence in receiver
+    entry_count BIGINT DEFAULT 0,
+    size_kb BIGINT DEFAULT 0,
+    attach_time TIMESTAMP,
+    detach_time TIMESTAMP,
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (name, library),
+    FOREIGN KEY (journal_name, journal_library) REFERENCES qsys._jrn(name, library)
+);
+
+-- Journal Entries (the actual journal data)
+CREATE TABLE IF NOT EXISTS qsys._jrne (
+    id BIGSERIAL PRIMARY KEY,                   -- JOSEQN - Sequence number
+    receiver_name VARCHAR(10) NOT NULL,
+    receiver_library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    journal_code CHAR(1) DEFAULT 'F',           -- JOCODE: F=File, C=Commit, J=Journal
+    entry_type CHAR(2) NOT NULL,                -- JOENTT: PT, UP, UB, DL, CM, RB
+    entry_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,  -- JOTSTP
+    job_name VARCHAR(26),                       -- JOJOB (job:user:number format)
+    job_user VARCHAR(10),                       -- JOUSER
+    job_number VARCHAR(6),                      -- JONBR
+    program_name VARCHAR(10),                   -- JOPGM
+    object_schema VARCHAR(128),                 -- Library/schema of journaled object
+    object_name VARCHAR(128),                   -- JOOBJ - Table name
+    object_member VARCHAR(10) DEFAULT 'DATA',   -- JOMBR
+    record_key TEXT,                            -- Primary key value(s) as JSON
+    relative_record BIGINT,                     -- JOCTRR - RRN if applicable
+    before_image JSONB,                         -- Record before change (UB, DL)
+    after_image JSONB,                          -- Record after change (PT, UP)
+    commit_cycle_id BIGINT,                     -- JOCCID - For transaction grouping
+    FOREIGN KEY (receiver_name, receiver_library)
+        REFERENCES qsys._jrnrcv(name, library)
+);
+
+-- Index for efficient journal queries
+CREATE INDEX IF NOT EXISTS idx_jrne_receiver ON qsys._jrne(receiver_name, receiver_library);
+CREATE INDEX IF NOT EXISTS idx_jrne_object ON qsys._jrne(object_schema, object_name);
+CREATE INDEX IF NOT EXISTS idx_jrne_time ON qsys._jrne(entry_time);
+CREATE INDEX IF NOT EXISTS idx_jrne_type ON qsys._jrne(journal_code, entry_type);
+CREATE INDEX IF NOT EXISTS idx_jrne_user ON qsys._jrne(job_user);
+
+-- Journaled Files (which tables are being journaled)
+CREATE TABLE IF NOT EXISTS qsys._jrnpf (
+    schema_name VARCHAR(128) NOT NULL,
+    table_name VARCHAR(128) NOT NULL,
+    journal_name VARCHAR(10) NOT NULL,
+    journal_library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    images VARCHAR(10) DEFAULT '*AFTER',        -- *AFTER or *BOTH
+    omit_open_close BOOLEAN DEFAULT TRUE,       -- OMTJRNE(*OPNCLO)
+    started_by VARCHAR(10),
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (schema_name, table_name),
+    FOREIGN KEY (journal_name, journal_library) REFERENCES qsys._jrn(name, library)
+);
+
+-- =============================================================================
 -- Default Libraries
 -- =============================================================================
 INSERT INTO qsys._lib (name, type, text, created_by) VALUES
@@ -4787,3 +4871,779 @@ def run_adhoc_query(
     except Exception as e:
         logger.error(f"Failed to run ad-hoc query: {e}")
         return False, str(e), []
+
+
+# =============================================================================
+# Journaling (AS/400-style *JRN/*JRNRCV)
+# =============================================================================
+
+# SQL for the journal trigger function
+JOURNAL_TRIGGER_SQL = """
+CREATE OR REPLACE FUNCTION qsys.journal_trigger_fn()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_journal_name VARCHAR(10);
+    v_journal_lib VARCHAR(10);
+    v_receiver_name VARCHAR(10);
+    v_receiver_lib VARCHAR(10);
+    v_images VARCHAR(10);
+    v_entry_type CHAR(2);
+    v_before_img JSONB;
+    v_after_img JSONB;
+    v_record_key TEXT;
+BEGIN
+    -- Get journal info for this table
+    SELECT journal_name, journal_library, images
+    INTO v_journal_name, v_journal_lib, v_images
+    FROM qsys._jrnpf
+    WHERE schema_name = TG_TABLE_SCHEMA AND table_name = TG_TABLE_NAME;
+
+    IF NOT FOUND THEN
+        -- Table not being journaled, skip
+        IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+    END IF;
+
+    -- Get current receiver
+    SELECT current_receiver, library
+    INTO v_receiver_name, v_receiver_lib
+    FROM qsys._jrn
+    WHERE name = v_journal_name AND library = v_journal_lib;
+
+    IF v_receiver_name IS NULL THEN
+        RAISE WARNING 'No receiver attached to journal %', v_journal_name;
+        IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+    END IF;
+
+    -- Determine entry type and images
+    CASE TG_OP
+        WHEN 'INSERT' THEN
+            v_entry_type := 'PT';
+            v_after_img := to_jsonb(NEW);
+            v_record_key := NEW::TEXT;
+        WHEN 'UPDATE' THEN
+            -- Insert before-image if IMAGES(*BOTH)
+            IF v_images = '*BOTH' THEN
+                INSERT INTO qsys._jrne (
+                    receiver_name, receiver_library, journal_code, entry_type,
+                    job_user, program_name, object_schema, object_name,
+                    record_key, before_image
+                ) VALUES (
+                    v_receiver_name, v_receiver_lib, 'F', 'UB',
+                    current_user, TG_NAME, TG_TABLE_SCHEMA, TG_TABLE_NAME,
+                    OLD::TEXT, to_jsonb(OLD)
+                );
+            END IF;
+            v_entry_type := 'UP';
+            v_after_img := to_jsonb(NEW);
+            v_record_key := NEW::TEXT;
+        WHEN 'DELETE' THEN
+            v_entry_type := 'DL';
+            v_before_img := to_jsonb(OLD);
+            v_record_key := OLD::TEXT;
+    END CASE;
+
+    -- Insert the journal entry
+    INSERT INTO qsys._jrne (
+        receiver_name, receiver_library, journal_code, entry_type,
+        job_user, program_name, object_schema, object_name,
+        record_key, before_image, after_image
+    ) VALUES (
+        v_receiver_name, v_receiver_lib, 'F', v_entry_type,
+        current_user, TG_NAME, TG_TABLE_SCHEMA, TG_TABLE_NAME,
+        v_record_key, v_before_img, v_after_img
+    );
+
+    -- Update receiver stats
+    UPDATE qsys._jrnrcv
+    SET entry_count = entry_count + 1,
+        last_entry = currval('qsys._jrne_id_seq')
+    WHERE name = v_receiver_name AND library = v_receiver_lib;
+
+    -- Update journal stats
+    UPDATE qsys._jrn
+    SET total_entries = total_entries + 1
+    WHERE name = v_journal_name AND library = v_journal_lib;
+
+    IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+END;
+$$ LANGUAGE plpgsql;
+"""
+
+
+def init_journal_trigger() -> bool:
+    """Create the journal trigger function in the database."""
+    try:
+        with get_cursor(dict_cursor=False) as cursor:
+            cursor.execute(JOURNAL_TRIGGER_SQL)
+        logger.info("Journal trigger function created")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to create journal trigger function: {e}")
+        return False
+
+
+def create_journal(name: str, library: str = 'QGPL', receiver: str = None,
+                   images: str = '*AFTER', text: str = '',
+                   created_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Create a journal (CRTJRN)."""
+    name = name.upper().strip()[:10]
+    library = library.upper().strip()[:10] if library else 'QGPL'
+
+    if not name:
+        return False, "Journal name is required"
+
+    if images not in ('*AFTER', '*BOTH'):
+        return False, "Images must be *AFTER or *BOTH"
+
+    # Ensure library exists
+    if not library_exists(library):
+        return False, f"Library {library} does not exist"
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO qsys._jrn (name, library, text, status, images, current_receiver, created_by)
+                VALUES (%s, %s, %s, '*ACTIVE', %s, %s, %s)
+            """, (name, library, text, images, receiver, created_by))
+
+        # If receiver specified, attach it
+        if receiver:
+            success, msg = attach_journal_receiver(name, library, receiver, library)
+            if not success:
+                return True, f"Journal {library}/{name} created, but receiver attach failed: {msg}"
+
+        return True, f"Journal {library}/{name} created"
+    except psycopg2.IntegrityError:
+        return False, f"Journal {library}/{name} already exists"
+    except Exception as e:
+        logger.error(f"Failed to create journal: {e}")
+        return False, f"Failed to create journal: {e}"
+
+
+def get_journal(name: str, library: str = 'QGPL') -> dict | None:
+    """Get a journal."""
+    name = name.upper().strip()
+    library = library.upper().strip() if library else 'QGPL'
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM qsys._jrn WHERE name = %s AND library = %s
+            """, (name, library))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'name': row['name'],
+                    'library': row['library'],
+                    'text': row['text'],
+                    'status': row['status'],
+                    'images': row['images'],
+                    'current_receiver': row['current_receiver'],
+                    'total_entries': row['total_entries'],
+                    'created_by': row['created_by'],
+                    'created': row['created'],
+                }
+    except Exception as e:
+        logger.error(f"Failed to get journal: {e}")
+    return None
+
+
+def list_journals(library: str = None) -> list[dict]:
+    """List journals (WRKJRN)."""
+    journals = []
+    try:
+        with get_cursor() as cursor:
+            if library:
+                library = library.upper().strip()
+                cursor.execute("""
+                    SELECT * FROM qsys._jrn WHERE library = %s ORDER BY name
+                """, (library,))
+            else:
+                cursor.execute("SELECT * FROM qsys._jrn ORDER BY library, name")
+
+            for row in cursor.fetchall():
+                journals.append({
+                    'name': row['name'],
+                    'library': row['library'],
+                    'text': row['text'],
+                    'status': row['status'],
+                    'images': row['images'],
+                    'current_receiver': row['current_receiver'],
+                    'total_entries': row['total_entries'],
+                    'created_by': row['created_by'],
+                    'created': row['created'],
+                })
+    except Exception as e:
+        logger.error(f"Failed to list journals: {e}")
+    return journals
+
+
+def delete_journal(name: str, library: str = 'QGPL') -> tuple[bool, str]:
+    """Delete a journal (DLTJRN)."""
+    name = name.upper().strip()
+    library = library.upper().strip() if library else 'QGPL'
+
+    # Check for journaled files
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT COUNT(*) as cnt FROM qsys._jrnpf
+                WHERE journal_name = %s AND journal_library = %s
+            """, (name, library))
+            if cursor.fetchone()['cnt'] > 0:
+                return False, f"Journal {library}/{name} has files journaled to it. Use ENDJRNPF first."
+
+            cursor.execute("""
+                DELETE FROM qsys._jrn WHERE name = %s AND library = %s
+            """, (name, library))
+            if cursor.rowcount == 0:
+                return False, f"Journal {library}/{name} not found"
+
+        return True, f"Journal {library}/{name} deleted"
+    except Exception as e:
+        logger.error(f"Failed to delete journal: {e}")
+        return False, f"Failed to delete journal: {e}"
+
+
+def change_journal(name: str, library: str = 'QGPL', status: str = None,
+                   images: str = None, text: str = None) -> tuple[bool, str]:
+    """Change a journal (CHGJRN)."""
+    name = name.upper().strip()
+    library = library.upper().strip() if library else 'QGPL'
+
+    updates = []
+    params = []
+
+    if status is not None:
+        if status not in ('*ACTIVE', '*INACTIVE'):
+            return False, "Status must be *ACTIVE or *INACTIVE"
+        updates.append("status = %s")
+        params.append(status)
+
+    if images is not None:
+        if images not in ('*AFTER', '*BOTH'):
+            return False, "Images must be *AFTER or *BOTH"
+        updates.append("images = %s")
+        params.append(images)
+
+    if text is not None:
+        updates.append("text = %s")
+        params.append(text[:50])
+
+    if not updates:
+        return False, "No changes specified"
+
+    params.extend([name, library])
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(f"""
+                UPDATE qsys._jrn SET {', '.join(updates)}
+                WHERE name = %s AND library = %s
+            """, params)
+            if cursor.rowcount == 0:
+                return False, f"Journal {library}/{name} not found"
+
+        return True, f"Journal {library}/{name} changed"
+    except Exception as e:
+        logger.error(f"Failed to change journal: {e}")
+        return False, f"Failed to change journal: {e}"
+
+
+def create_journal_receiver(name: str, library: str = 'QGPL',
+                            journal: str = None, journal_lib: str = None,
+                            text: str = '', created_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Create a journal receiver (CRTJRNRCV)."""
+    name = name.upper().strip()[:10]
+    library = library.upper().strip()[:10] if library else 'QGPL'
+
+    if not name:
+        return False, "Journal receiver name is required"
+
+    # Ensure library exists
+    if not library_exists(library):
+        return False, f"Library {library} does not exist"
+
+    # If journal specified, verify it exists
+    if journal:
+        journal = journal.upper().strip()
+        journal_lib = journal_lib.upper().strip() if journal_lib else library
+        jrn = get_journal(journal, journal_lib)
+        if not jrn:
+            return False, f"Journal {journal_lib}/{journal} not found"
+    else:
+        # Receiver must be attached to a journal later
+        journal = ''
+        journal_lib = ''
+
+    try:
+        with get_cursor() as cursor:
+            # Get next sequence number if attaching to journal
+            sequence = 1
+            if journal:
+                cursor.execute("""
+                    SELECT COALESCE(MAX(sequence), 0) + 1 as next_seq
+                    FROM qsys._jrnrcv
+                    WHERE journal_name = %s AND journal_library = %s
+                """, (journal, journal_lib))
+                sequence = cursor.fetchone()['next_seq']
+
+            cursor.execute("""
+                INSERT INTO qsys._jrnrcv (name, library, journal_name, journal_library,
+                                          text, status, sequence, created_by)
+                VALUES (%s, %s, %s, %s, %s, '*DETACHED', %s, %s)
+            """, (name, library, journal or '', journal_lib or '', text, sequence, created_by))
+
+        return True, f"Journal receiver {library}/{name} created"
+    except psycopg2.IntegrityError:
+        return False, f"Journal receiver {library}/{name} already exists"
+    except Exception as e:
+        logger.error(f"Failed to create journal receiver: {e}")
+        return False, f"Failed to create journal receiver: {e}"
+
+
+def get_journal_receiver(name: str, library: str = 'QGPL') -> dict | None:
+    """Get a journal receiver."""
+    name = name.upper().strip()
+    library = library.upper().strip() if library else 'QGPL'
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM qsys._jrnrcv WHERE name = %s AND library = %s
+            """, (name, library))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'name': row['name'],
+                    'library': row['library'],
+                    'journal_name': row['journal_name'],
+                    'journal_library': row['journal_library'],
+                    'text': row['text'],
+                    'status': row['status'],
+                    'sequence': row['sequence'],
+                    'first_entry': row['first_entry'],
+                    'last_entry': row['last_entry'],
+                    'entry_count': row['entry_count'],
+                    'size_kb': row['size_kb'],
+                    'attach_time': row['attach_time'],
+                    'detach_time': row['detach_time'],
+                    'created_by': row['created_by'],
+                    'created': row['created'],
+                }
+    except Exception as e:
+        logger.error(f"Failed to get journal receiver: {e}")
+    return None
+
+
+def list_journal_receivers(journal: str = None, library: str = None) -> list[dict]:
+    """List journal receivers."""
+    receivers = []
+    try:
+        with get_cursor() as cursor:
+            if journal:
+                journal = journal.upper().strip()
+                jlib = library.upper().strip() if library else 'QGPL'
+                cursor.execute("""
+                    SELECT * FROM qsys._jrnrcv
+                    WHERE journal_name = %s AND journal_library = %s
+                    ORDER BY sequence
+                """, (journal, jlib))
+            elif library:
+                library = library.upper().strip()
+                cursor.execute("""
+                    SELECT * FROM qsys._jrnrcv WHERE library = %s ORDER BY name
+                """, (library,))
+            else:
+                cursor.execute("SELECT * FROM qsys._jrnrcv ORDER BY library, name")
+
+            for row in cursor.fetchall():
+                receivers.append({
+                    'name': row['name'],
+                    'library': row['library'],
+                    'journal_name': row['journal_name'],
+                    'journal_library': row['journal_library'],
+                    'text': row['text'],
+                    'status': row['status'],
+                    'sequence': row['sequence'],
+                    'entry_count': row['entry_count'],
+                    'created': row['created'],
+                })
+    except Exception as e:
+        logger.error(f"Failed to list journal receivers: {e}")
+    return receivers
+
+
+def attach_journal_receiver(journal: str, journal_lib: str, receiver: str,
+                            receiver_lib: str = None) -> tuple[bool, str]:
+    """Attach a receiver to a journal (CHGJRN JRNRCV)."""
+    journal = journal.upper().strip()
+    journal_lib = journal_lib.upper().strip() if journal_lib else 'QGPL'
+    receiver = receiver.upper().strip()
+    receiver_lib = receiver_lib.upper().strip() if receiver_lib else journal_lib
+
+    # Verify journal exists
+    jrn = get_journal(journal, journal_lib)
+    if not jrn:
+        return False, f"Journal {journal_lib}/{journal} not found"
+
+    # Detach current receiver if any
+    if jrn['current_receiver']:
+        detach_journal_receiver(journal, journal_lib)
+
+    try:
+        with get_cursor() as cursor:
+            # Get next sequence number
+            cursor.execute("""
+                SELECT COALESCE(MAX(sequence), 0) + 1 as next_seq
+                FROM qsys._jrnrcv
+                WHERE journal_name = %s AND journal_library = %s
+            """, (journal, journal_lib))
+            next_seq = cursor.fetchone()['next_seq']
+
+            # Update receiver to attached
+            cursor.execute("""
+                UPDATE qsys._jrnrcv
+                SET status = '*ATTACHED',
+                    journal_name = %s, journal_library = %s,
+                    sequence = %s, attach_time = CURRENT_TIMESTAMP
+                WHERE name = %s AND library = %s
+            """, (journal, journal_lib, next_seq, receiver, receiver_lib))
+
+            if cursor.rowcount == 0:
+                return False, f"Journal receiver {receiver_lib}/{receiver} not found"
+
+            # Update journal's current receiver
+            cursor.execute("""
+                UPDATE qsys._jrn SET current_receiver = %s
+                WHERE name = %s AND library = %s
+            """, (receiver, journal, journal_lib))
+
+        return True, f"Receiver {receiver_lib}/{receiver} attached to journal {journal_lib}/{journal}"
+    except Exception as e:
+        logger.error(f"Failed to attach receiver: {e}")
+        return False, f"Failed to attach receiver: {e}"
+
+
+def detach_journal_receiver(journal: str, journal_lib: str) -> tuple[bool, str]:
+    """Detach the current receiver from a journal."""
+    journal = journal.upper().strip()
+    journal_lib = journal_lib.upper().strip() if journal_lib else 'QGPL'
+
+    jrn = get_journal(journal, journal_lib)
+    if not jrn:
+        return False, f"Journal {journal_lib}/{journal} not found"
+
+    if not jrn['current_receiver']:
+        return False, f"Journal {journal_lib}/{journal} has no attached receiver"
+
+    try:
+        with get_cursor() as cursor:
+            # Update receiver to detached
+            cursor.execute("""
+                UPDATE qsys._jrnrcv
+                SET status = '*DETACHED', detach_time = CURRENT_TIMESTAMP
+                WHERE journal_name = %s AND journal_library = %s AND status = '*ATTACHED'
+            """, (journal, journal_lib))
+
+            # Clear journal's current receiver
+            cursor.execute("""
+                UPDATE qsys._jrn SET current_receiver = NULL
+                WHERE name = %s AND library = %s
+            """, (journal, journal_lib))
+
+        return True, f"Receiver detached from journal {journal_lib}/{journal}"
+    except Exception as e:
+        logger.error(f"Failed to detach receiver: {e}")
+        return False, f"Failed to detach receiver: {e}"
+
+
+def start_journal_pf(schema: str, table: str, journal: str, journal_lib: str = 'QGPL',
+                     images: str = '*AFTER', started_by: str = 'SYSTEM') -> tuple[bool, str]:
+    """Start journaling a physical file/table (STRJRNPF)."""
+    schema = schema.lower().strip()
+    table = table.lower().strip()
+    journal = journal.upper().strip()
+    journal_lib = journal_lib.upper().strip() if journal_lib else 'QGPL'
+
+    if images not in ('*AFTER', '*BOTH'):
+        return False, "Images must be *AFTER or *BOTH"
+
+    # Verify journal exists and has receiver
+    jrn = get_journal(journal, journal_lib)
+    if not jrn:
+        return False, f"Journal {journal_lib}/{journal} not found"
+    if not jrn['current_receiver']:
+        return False, f"Journal {journal_lib}/{journal} has no attached receiver"
+    if jrn['status'] != '*ACTIVE':
+        return False, f"Journal {journal_lib}/{journal} is not active"
+
+    # Ensure trigger function exists
+    init_journal_trigger()
+
+    try:
+        with get_cursor(dict_cursor=False) as cursor:
+            # Register file as journaled
+            cursor.execute("""
+                INSERT INTO qsys._jrnpf (schema_name, table_name, journal_name, journal_library,
+                                         images, started_by)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (schema_name, table_name) DO UPDATE
+                SET journal_name = %s, journal_library = %s, images = %s,
+                    started_by = %s, started_at = CURRENT_TIMESTAMP
+            """, (schema, table, journal, journal_lib, images, started_by,
+                  journal, journal_lib, images, started_by))
+
+            # Create trigger on the table
+            trigger_name = f"jrn_{table}"
+            # Drop existing trigger if any
+            cursor.execute(f"""
+                DROP TRIGGER IF EXISTS {trigger_name} ON {schema}.{table}
+            """)
+
+            # Create the journal trigger
+            cursor.execute(f"""
+                CREATE TRIGGER {trigger_name}
+                AFTER INSERT OR UPDATE OR DELETE ON {schema}.{table}
+                FOR EACH ROW EXECUTE FUNCTION qsys.journal_trigger_fn()
+            """)
+
+        return True, f"Journaling started for {schema}.{table} to {journal_lib}/{journal}"
+    except psycopg2.ProgrammingError as e:
+        if "does not exist" in str(e):
+            return False, f"Table {schema}.{table} does not exist"
+        logger.error(f"Failed to start journaling: {e}")
+        return False, f"Failed to start journaling: {e}"
+    except Exception as e:
+        logger.error(f"Failed to start journaling: {e}")
+        return False, f"Failed to start journaling: {e}"
+
+
+def end_journal_pf(schema: str, table: str) -> tuple[bool, str]:
+    """End journaling a physical file/table (ENDJRNPF)."""
+    schema = schema.lower().strip()
+    table = table.lower().strip()
+
+    try:
+        with get_cursor(dict_cursor=False) as cursor:
+            # Remove trigger
+            trigger_name = f"jrn_{table}"
+            cursor.execute(f"""
+                DROP TRIGGER IF EXISTS {trigger_name} ON {schema}.{table}
+            """)
+
+            # Remove from journaled files table
+            cursor.execute("""
+                DELETE FROM qsys._jrnpf WHERE schema_name = %s AND table_name = %s
+            """, (schema, table))
+
+            if cursor.rowcount == 0:
+                return False, f"Table {schema}.{table} is not being journaled"
+
+        return True, f"Journaling ended for {schema}.{table}"
+    except Exception as e:
+        logger.error(f"Failed to end journaling: {e}")
+        return False, f"Failed to end journaling: {e}"
+
+
+def list_journaled_files(journal: str = None, library: str = None) -> list[dict]:
+    """List files being journaled."""
+    files = []
+    try:
+        with get_cursor() as cursor:
+            if journal:
+                journal = journal.upper().strip()
+                jlib = library.upper().strip() if library else 'QGPL'
+                cursor.execute("""
+                    SELECT * FROM qsys._jrnpf
+                    WHERE journal_name = %s AND journal_library = %s
+                    ORDER BY schema_name, table_name
+                """, (journal, jlib))
+            else:
+                cursor.execute("""
+                    SELECT * FROM qsys._jrnpf ORDER BY schema_name, table_name
+                """)
+
+            for row in cursor.fetchall():
+                files.append({
+                    'schema_name': row['schema_name'],
+                    'table_name': row['table_name'],
+                    'journal_name': row['journal_name'],
+                    'journal_library': row['journal_library'],
+                    'images': row['images'],
+                    'started_by': row['started_by'],
+                    'started_at': row['started_at'],
+                })
+    except Exception as e:
+        logger.error(f"Failed to list journaled files: {e}")
+    return files
+
+
+def get_journal_entries(journal: str = None, library: str = None,
+                        receiver: str = None, object_name: str = None,
+                        object_schema: str = None, entry_type: str = None,
+                        from_time: str = None, to_time: str = None,
+                        from_seq: int = None, to_seq: int = None,
+                        job_user: str = None, limit: int = 100,
+                        offset: int = 0) -> list[dict]:
+    """Get journal entries (DSPJRN)."""
+    entries = []
+    try:
+        with get_cursor() as cursor:
+            query = "SELECT * FROM qsys._jrne WHERE 1=1"
+            params = []
+
+            # Filter by journal (via receiver)
+            if journal:
+                journal = journal.upper().strip()
+                jlib = library.upper().strip() if library else 'QGPL'
+                # Get all receivers for this journal
+                cursor.execute("""
+                    SELECT name, library FROM qsys._jrnrcv
+                    WHERE journal_name = %s AND journal_library = %s
+                """, (journal, jlib))
+                receivers = cursor.fetchall()
+                if receivers:
+                    rcv_conditions = []
+                    for r in receivers:
+                        rcv_conditions.append("(receiver_name = %s AND receiver_library = %s)")
+                        params.extend([r['name'], r['library']])
+                    query += f" AND ({' OR '.join(rcv_conditions)})"
+                else:
+                    return []  # No receivers, no entries
+
+            if receiver:
+                receiver = receiver.upper().strip()
+                rlib = library.upper().strip() if library else 'QGPL'
+                query += " AND receiver_name = %s AND receiver_library = %s"
+                params.extend([receiver, rlib])
+
+            if object_name:
+                query += " AND object_name = %s"
+                params.append(object_name.lower())
+
+            if object_schema:
+                query += " AND object_schema = %s"
+                params.append(object_schema.lower())
+
+            if entry_type:
+                query += " AND entry_type = %s"
+                params.append(entry_type.upper())
+
+            if from_time:
+                query += " AND entry_time >= %s"
+                params.append(from_time)
+
+            if to_time:
+                query += " AND entry_time <= %s"
+                params.append(to_time)
+
+            if from_seq:
+                query += " AND id >= %s"
+                params.append(from_seq)
+
+            if to_seq:
+                query += " AND id <= %s"
+                params.append(to_seq)
+
+            if job_user:
+                query += " AND job_user = %s"
+                params.append(job_user.upper())
+
+            query += " ORDER BY id DESC LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+
+            for row in cursor.fetchall():
+                entries.append({
+                    'id': row['id'],
+                    'receiver_name': row['receiver_name'],
+                    'receiver_library': row['receiver_library'],
+                    'journal_code': row['journal_code'].strip() if row['journal_code'] else 'F',
+                    'entry_type': row['entry_type'].strip() if row['entry_type'] else '',
+                    'entry_time': row['entry_time'],
+                    'job_name': row['job_name'],
+                    'job_user': row['job_user'],
+                    'job_number': row['job_number'],
+                    'program_name': row['program_name'],
+                    'object_schema': row['object_schema'],
+                    'object_name': row['object_name'],
+                    'object_member': row['object_member'],
+                    'record_key': row['record_key'],
+                    'before_image': row['before_image'],
+                    'after_image': row['after_image'],
+                })
+    except Exception as e:
+        logger.error(f"Failed to get journal entries: {e}")
+    return entries
+
+
+def get_journal_entry(entry_id: int) -> dict | None:
+    """Get a specific journal entry."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("SELECT * FROM qsys._jrne WHERE id = %s", (entry_id,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'id': row['id'],
+                    'receiver_name': row['receiver_name'],
+                    'receiver_library': row['receiver_library'],
+                    'journal_code': row['journal_code'].strip() if row['journal_code'] else 'F',
+                    'entry_type': row['entry_type'].strip() if row['entry_type'] else '',
+                    'entry_time': row['entry_time'],
+                    'job_name': row['job_name'],
+                    'job_user': row['job_user'],
+                    'job_number': row['job_number'],
+                    'program_name': row['program_name'],
+                    'object_schema': row['object_schema'],
+                    'object_name': row['object_name'],
+                    'object_member': row['object_member'],
+                    'record_key': row['record_key'],
+                    'relative_record': row['relative_record'],
+                    'before_image': row['before_image'],
+                    'after_image': row['after_image'],
+                    'commit_cycle_id': row['commit_cycle_id'],
+                }
+    except Exception as e:
+        logger.error(f"Failed to get journal entry: {e}")
+    return None
+
+
+def count_journal_entries(journal: str = None, library: str = None,
+                          receiver: str = None) -> int:
+    """Count journal entries."""
+    try:
+        with get_cursor() as cursor:
+            query = "SELECT COUNT(*) as cnt FROM qsys._jrne WHERE 1=1"
+            params = []
+
+            if journal:
+                journal = journal.upper().strip()
+                jlib = library.upper().strip() if library else 'QGPL'
+                cursor.execute("""
+                    SELECT name, library FROM qsys._jrnrcv
+                    WHERE journal_name = %s AND journal_library = %s
+                """, (journal, jlib))
+                receivers = cursor.fetchall()
+                if receivers:
+                    rcv_conditions = []
+                    for r in receivers:
+                        rcv_conditions.append("(receiver_name = %s AND receiver_library = %s)")
+                        params.extend([r['name'], r['library']])
+                    query += f" AND ({' OR '.join(rcv_conditions)})"
+                else:
+                    return 0
+
+            if receiver:
+                receiver = receiver.upper().strip()
+                rlib = library.upper().strip() if library else 'QGPL'
+                query += " AND receiver_name = %s AND receiver_library = %s"
+                params.extend([receiver, rlib])
+
+            cursor.execute(query, params)
+            return cursor.fetchone()['cnt']
+    except Exception as e:
+        logger.error(f"Failed to count journal entries: {e}")
+    return 0
