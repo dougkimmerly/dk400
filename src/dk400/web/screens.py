@@ -57,6 +57,9 @@ from src.dk400.web.database import (
     list_query_definitions, create_query_definition, get_query_definition,
     update_query_definition, delete_query_definition, execute_query_definition,
     run_adhoc_query, list_table_columns, QUERY_OPERATORS, AGGREGATE_FUNCTIONS,
+    # Libraries
+    list_libraries, create_library, delete_library, get_library,
+    library_exists, get_library_objects,
 )
 
 
@@ -166,11 +169,15 @@ class ScreenManager:
         'WRKUSRPRF': 'wrkusrprf',
         'CRTUSRPRF': 'user_create',
         'DSPUSRAUT': 'user_authorities',
-        # Schema and object authority commands
+        # Schema and object authority commands (PostgreSQL schemas)
         'WRKSCHEMA': 'wrkschema',
-        'WRKLIB': 'wrkschema',  # AS/400 alias
         'CRTSCHEMA': 'schema_create',
-        'CRTLIB': 'schema_create',  # AS/400 alias
+        # AS/400-style Libraries (library schemas)
+        'WRKLIB': 'wrklib',
+        'CRTLIB': 'crtlib',
+        'DSPLIB': 'dsplib',
+        'DLTLIB': 'dltlib',
+        'WRKOBJ': 'wrkobj',
         'GRTOBJAUT': 'grtobjaut',
         'RVKOBJAUT': 'rvkobjaut',
         'DSPOBJAUT': 'dspobjaut',
@@ -240,10 +247,13 @@ class ScreenManager:
         'WRKUSRPRF': 'Work with User Profiles',
         'CRTUSRPRF': 'Create User Profile',
         'DSPUSRAUT': 'Display User Authorities',
-        'WRKSCHEMA': 'Work with Schemas (Libraries)',
+        'WRKSCHEMA': 'Work with PostgreSQL Schemas',
+        'CRTSCHEMA': 'Create PostgreSQL Schema',
         'WRKLIB': 'Work with Libraries',
-        'CRTSCHEMA': 'Create Schema (Library)',
         'CRTLIB': 'Create Library',
+        'DSPLIB': 'Display Library',
+        'DLTLIB': 'Delete Library',
+        'WRKOBJ': 'Work with Objects',
         'GRTOBJAUT': 'Grant Object Authority',
         'RVKOBJAUT': 'Revoke Object Authority',
         'DSPOBJAUT': 'Display Object Authority',
@@ -462,6 +472,9 @@ class ScreenManager:
                 session.field_values['qry_cond_mode'] = 'add'
                 session.field_values.pop('qry_edit_cond_idx', None)
                 return self.get_screen(session, 'qrycond')
+            elif screen == 'wrklib':
+                # F6=Create on Work with Libraries
+                return self.get_screen(session, 'crtlib')
         elif key == 'F7':
             # Screen-specific F7 handling
             if screen == 'wrkalr':
@@ -525,6 +538,9 @@ class ScreenManager:
             # Subsystem screens
             elif screen in ('dspsbsd', 'crtsbsd', 'strsbs', 'endsbs'):
                 return self.get_screen(session, 'wrksbsd')
+            # Library screens
+            elif screen in ('crtlib', 'dsplib', 'dltlib', 'chglib', 'wrkobj'):
+                return self.get_screen(session, 'wrklib')
             # Query screens
             elif screen == 'qrydefine':
                 return self.get_screen(session, 'wrkqry')
@@ -581,6 +597,9 @@ class ScreenManager:
         'qrywhere': 8,
         'qrysort': 8,
         'qryrun': 18,
+        # Library screens
+        'wrklib': 12,
+        'wrkobj': 12,
     }
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
@@ -7781,3 +7800,553 @@ class ScreenManager:
         session.message_level = "info"
 
         return self.get_screen(session, 'qrydefine')
+
+    # ========================================
+    # LIBRARY MANAGEMENT SCREENS
+    # ========================================
+
+    def _screen_wrklib(self, session: Session) -> dict:
+        """Work with Libraries screen - AS/400-style library list."""
+        hostname, date_str, time_str = get_system_info()
+        libraries = list_libraries()
+
+        offset = session.get_offset('wrklib')
+        page_size = 12
+
+        content = [
+            pad_line(f" {hostname:<20}         Work with Libraries                 {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   2=Change   4=Delete   5=Display   12=Work with objects"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Library     Type    Text                                  "), "class": "field-reverse"}],
+        ]
+
+        # Blank row for creating new library (like AS/400)
+        fields = []
+        content.append([
+            {"type": "input", "id": "opt_new", "width": 3, "class": "field-input"},
+            {"type": "text", "text": "  "},
+            {"type": "input", "id": "new_name", "width": 10, "class": "field-input"},
+            {"type": "text", "text": " "},
+            {"type": "input", "id": "new_type", "width": 6, "value": "*PROD", "class": "field-input"},
+            {"type": "text", "text": "  "},
+            {"type": "input", "id": "new_text", "width": 40, "class": "field-input"},
+        ])
+        fields.extend([{"id": "opt_new"}, {"id": "new_name"}, {"id": "new_type"}, {"id": "new_text"}])
+
+        # List existing libraries
+        page_libs = libraries[offset:offset + page_size]
+        for i, lib in enumerate(page_libs):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {lib['name']:<10} {lib['type']:<6}  {lib['text'][:40]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        # Pad to fill screen
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        # More/Bottom indicator
+        more = "More..." if len(libraries) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrklib",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_wrklib(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Libraries submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        # Check for new library creation (type name in blank row)
+        new_name = fields.get('new_name', '').strip().upper()
+        opt_new = fields.get('opt_new', '').strip()
+        if new_name and (opt_new == '1' or not opt_new):
+            # Create new library
+            new_type = fields.get('new_type', '*PROD').strip().upper() or '*PROD'
+            new_text = fields.get('new_text', '').strip()
+            success, msg = create_library(new_name, text=new_text, lib_type=new_type,
+                                          created_by=session.user)
+            session.message = msg
+            session.message_level = "info" if success else "error"
+            return self.get_screen(session, 'wrklib')
+
+        libraries = list_libraries()
+        offset = session.get_offset('wrklib')
+        page_size = 12
+        page_libs = libraries[offset:offset + page_size]
+
+        for i, lib in enumerate(page_libs):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                if opt == '2':  # Change
+                    session.field_values['selected_lib'] = lib['name']
+                    return self.get_screen(session, 'chglib')
+                elif opt == '4':  # Delete
+                    session.field_values['selected_lib'] = lib['name']
+                    return self.get_screen(session, 'dltlib')
+                elif opt == '5':  # Display
+                    session.field_values['selected_lib'] = lib['name']
+                    return self.get_screen(session, 'dsplib')
+                elif opt == '12':  # Work with objects
+                    session.field_values['selected_lib'] = lib['name']
+                    return self.get_screen(session, 'wrkobj')
+                else:
+                    session.message = f"Option {opt} not valid"
+                    session.message_level = "error"
+                    return self.get_screen(session, 'wrklib')
+
+        return self.get_screen(session, 'wrklib')
+
+    def _screen_crtlib(self, session: Session) -> dict:
+        """Create Library screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}      Create Library (CRTLIB)                {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choices, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Library . . . . . . . . :  "},
+                {"type": "input", "id": "name", "width": 10},
+                {"type": "text", "text": "  Name"},
+            ],
+            [
+                {"type": "text", "text": " Library type  . . . . . :  "},
+                {"type": "input", "id": "type", "width": 10, "value": "*PROD"},
+                {"type": "text", "text": "  *PROD, *TEST"},
+            ],
+            [
+                {"type": "text", "text": " Text 'description'  . . :  "},
+                {"type": "input", "id": "text", "width": 40},
+            ],
+            [
+                {"type": "text", "text": " ASP number  . . . . . . :  "},
+                {"type": "input", "id": "asp", "width": 3, "value": "1"},
+                {"type": "text", "text": "  1-32"},
+            ],
+            [
+                {"type": "text", "text": " Create authority  . . . :  "},
+                {"type": "input", "id": "crtaut", "width": 10, "value": "*SYSVAL"},
+                {"type": "text", "text": "  *SYSVAL, *ALL, *CHANGE, *USE, *EXCLUDE"},
+            ],
+        ]
+
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "crtlib",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "name"}, {"id": "type"}, {"id": "text"}, {"id": "asp"}, {"id": "crtaut"}],
+            "activeField": 0,
+        }
+
+    def _submit_crtlib(self, session: Session, fields: dict) -> dict:
+        """Handle Create Library submission."""
+        name = fields.get('name', '').strip().upper()
+        lib_type = fields.get('type', '*PROD').strip().upper() or '*PROD'
+        text = fields.get('text', '').strip()
+        try:
+            asp = int(fields.get('asp', '1') or '1')
+        except ValueError:
+            asp = 1
+        crtaut = fields.get('crtaut', '*SYSVAL').strip().upper() or '*SYSVAL'
+
+        if not name:
+            session.message = "Library name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'crtlib')
+
+        success, msg = create_library(name, text=text, lib_type=lib_type,
+                                      asp_number=asp, create_authority=crtaut,
+                                      created_by=session.user)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrklib')
+        return self.get_screen(session, 'crtlib')
+
+    def _screen_dsplib(self, session: Session) -> dict:
+        """Display Library screen - shows library details and object counts."""
+        hostname, date_str, time_str = get_system_info()
+        lib_name = session.field_values.get('selected_lib', '')
+        lib = get_library(lib_name)
+
+        if not lib:
+            session.message = f"Library {lib_name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrklib')
+
+        # Get object counts by type
+        objects = get_library_objects(lib_name)
+        obj_counts = {}
+        for obj in objects:
+            obj_type = obj.get('object_type', 'UNKNOWN')
+            obj_counts[obj_type] = obj_counts.get(obj_type, 0) + 1
+
+        content = [
+            pad_line(f" {hostname:<20}      Display Library (DSPLIB)               {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Library  . . . . . . . :  {lib['name']}"),
+            pad_line(f" Type . . . . . . . . . :  {lib['type']}"),
+            pad_line(f" Text . . . . . . . . . :  {lib['text']}"),
+            pad_line(f" ASP number . . . . . . :  {lib.get('asp_number', 1)}"),
+            pad_line(f" Create authority . . . :  {lib.get('create_authority', '*SYSVAL')}"),
+            pad_line(f" Created  . . . . . . . :  {lib.get('created', '')}"),
+            pad_line(f" Created by . . . . . . :  {lib.get('created_by', '')}"),
+            pad_line(""),
+            pad_line(" Object summary:"),
+        ]
+
+        # Display object counts by type
+        type_labels = {
+            '*DTAARA': 'Data areas',
+            '*MSGQ': 'Message queues',
+            '*QRYDFN': 'Query definitions',
+            '*JOBD': 'Job descriptions',
+            '*OUTQ': 'Output queues',
+            '*AUTL': 'Authorization lists',
+            '*SBSD': 'Subsystem descriptions',
+            '*JOBSCDE': 'Job schedule entries',
+        }
+        for obj_type, label in type_labels.items():
+            count = obj_counts.get(obj_type, 0)
+            if count > 0:
+                content.append(pad_line(f"   {label:<25} {count:>5}"))
+
+        total_objects = len(objects)
+        content.append(pad_line(""))
+        content.append(pad_line(f" Total objects  . . . . :  {total_objects}"))
+
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "dsplib",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": None,
+        }
+
+    def _screen_dltlib(self, session: Session) -> dict:
+        """Delete Library confirmation screen."""
+        hostname, date_str, time_str = get_system_info()
+        lib_name = session.field_values.get('selected_lib', '')
+        lib = get_library(lib_name)
+
+        if not lib:
+            session.message = f"Library {lib_name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrklib')
+
+        # Get object count for warning
+        objects = get_library_objects(lib_name)
+        obj_count = len(objects)
+
+        content = [
+            pad_line(f" {hostname:<20}      Delete Library (DLTLIB)                {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Confirm delete of library."),
+            pad_line(""),
+            pad_line(f" Library  . . . . . . . :  {lib['name']}"),
+            pad_line(f" Type . . . . . . . . . :  {lib['type']}"),
+            pad_line(f" Text . . . . . . . . . :  {lib['text']}"),
+            pad_line(""),
+        ]
+
+        if obj_count > 0:
+            content.append([{"type": "text", "text": pad_line(f" WARNING: Library contains {obj_count} object(s) which will be deleted!"), "class": "field-error"}])
+        else:
+            content.append(pad_line(" Library is empty."))
+
+        content.append(pad_line(""))
+        content.append(pad_line(" Press Enter to confirm delete, F12 to cancel."))
+
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "dltlib",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": None,
+        }
+
+    def _submit_dltlib(self, session: Session, fields: dict) -> dict:
+        """Handle Delete Library confirmation."""
+        lib_name = session.field_values.get('selected_lib', '')
+
+        success, msg = delete_library(lib_name)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        return self.get_screen(session, 'wrklib')
+
+    def _screen_chglib(self, session: Session) -> dict:
+        """Change Library screen."""
+        hostname, date_str, time_str = get_system_info()
+        lib_name = session.field_values.get('selected_lib', '')
+        lib = get_library(lib_name)
+
+        if not lib:
+            session.message = f"Library {lib_name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrklib')
+
+        content = [
+            pad_line(f" {hostname:<20}      Change Library (CHGLIB)                {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type changes, press Enter."),
+            pad_line(""),
+            pad_line(f" Library  . . . . . . . :  {lib['name']}"),
+            [
+                {"type": "text", "text": " Library type  . . . . . :  "},
+                {"type": "input", "id": "type", "width": 10, "value": lib['type']},
+                {"type": "text", "text": "  *PROD, *TEST"},
+            ],
+            [
+                {"type": "text", "text": " Text 'description'  . . :  "},
+                {"type": "input", "id": "text", "width": 40, "value": lib['text']},
+            ],
+        ]
+
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "chglib",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "type"}, {"id": "text"}],
+            "activeField": 0,
+        }
+
+    def _submit_chglib(self, session: Session, fields: dict) -> dict:
+        """Handle Change Library submission."""
+        lib_name = session.field_values.get('selected_lib', '')
+        lib_type = fields.get('type', '*PROD').strip().upper() or '*PROD'
+        text = fields.get('text', '').strip()
+
+        # Update library metadata in the libraries table
+        try:
+            from src.dk400.web.database import get_cursor
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    UPDATE libraries
+                    SET type = %s, text = %s
+                    WHERE name = %s
+                """, (lib_type, text, lib_name))
+            session.message = f"Library {lib_name} changed"
+            session.message_level = "info"
+        except Exception as e:
+            session.message = f"Error changing library: {e}"
+            session.message_level = "error"
+            return self.get_screen(session, 'chglib')
+
+        return self.get_screen(session, 'wrklib')
+
+    def _screen_wrkobj(self, session: Session) -> dict:
+        """Work with Objects in Library screen."""
+        hostname, date_str, time_str = get_system_info()
+        lib_name = session.field_values.get('selected_lib', '')
+        objects = get_library_objects(lib_name)
+
+        offset = session.get_offset('wrkobj')
+        page_size = 12
+
+        content = [
+            pad_line(f" {hostname:<20}     Work with Objects                       {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Library  . . . . . . . :  {lib_name}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   4=Delete   5=Display"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Object     Type      Text"), "class": "field-reverse"}],
+        ]
+
+        fields = []
+        page_objs = objects[offset:offset + page_size]
+
+        for i, obj in enumerate(page_objs):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {obj['name']:<10} {obj['object_type']:<8}  {obj.get('text', '')[:35]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        more = "More..." if len(objects) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrkobj",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_wrkobj(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Objects submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        lib_name = session.field_values.get('selected_lib', '')
+        objects = get_library_objects(lib_name)
+        offset = session.get_offset('wrkobj')
+        page_size = 12
+        page_objs = objects[offset:offset + page_size]
+
+        for i, obj in enumerate(page_objs):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                obj_type = obj.get('object_type', '')
+                obj_name = obj['name']
+
+                if opt == '4':  # Delete
+                    success, msg = self._delete_object(lib_name, obj_name, obj_type)
+                    session.message = msg
+                    session.message_level = "info" if success else "error"
+                    return self.get_screen(session, 'wrkobj')
+                elif opt == '5':  # Display
+                    return self._display_object(session, lib_name, obj_name, obj_type)
+                else:
+                    session.message = f"Option {opt} not valid"
+                    session.message_level = "error"
+                    return self.get_screen(session, 'wrkobj')
+
+        return self.get_screen(session, 'wrkobj')
+
+    def _delete_object(self, library: str, name: str, obj_type: str) -> tuple[bool, str]:
+        """Delete an object from a library by type."""
+        if obj_type == '*DTAARA':
+            return delete_data_area(name, library)
+        elif obj_type == '*MSGQ':
+            return delete_message_queue(name, library)
+        elif obj_type == '*QRYDFN':
+            return delete_query_definition(name, library)
+        elif obj_type == '*JOBD':
+            return delete_job_description(name, library)
+        elif obj_type == '*OUTQ':
+            return delete_output_queue(name, library)
+        elif obj_type == '*AUTL':
+            return delete_authorization_list(name, library)
+        elif obj_type == '*SBSD':
+            return delete_subsystem_description(name, library)
+        elif obj_type == '*JOBSCDE':
+            return remove_job_schedule_entry(name, library)
+        else:
+            return False, f"Cannot delete object type {obj_type}"
+
+    def _display_object(self, session: Session, library: str, name: str, obj_type: str) -> dict:
+        """Navigate to the display screen for an object type."""
+        if obj_type == '*DTAARA':
+            session.field_values['selected_dtaara'] = name
+            session.field_values['selected_dtaara_lib'] = library
+            return self.get_screen(session, 'dspdtaara')
+        elif obj_type == '*MSGQ':
+            session.field_values['selected_msgq'] = name
+            session.field_values['selected_msgq_lib'] = library
+            return self.get_screen(session, 'dspmsg')
+        elif obj_type == '*QRYDFN':
+            session.field_values['qry_name'] = name
+            session.field_values['qry_library'] = library
+            return self.get_screen(session, 'qrydefine')
+        elif obj_type == '*JOBD':
+            session.field_values['selected_jobd'] = name
+            session.field_values['selected_jobd_lib'] = library
+            return self.get_screen(session, 'dspjobd')
+        elif obj_type == '*OUTQ':
+            session.field_values['selected_outq'] = name
+            session.field_values['selected_outq_lib'] = library
+            return self.get_screen(session, 'wrkoutq')
+        elif obj_type == '*AUTL':
+            session.field_values['selected_autl'] = name
+            session.field_values['selected_autl_lib'] = library
+            return self.get_screen(session, 'dspautl')
+        elif obj_type == '*SBSD':
+            session.field_values['selected_sbsd'] = name
+            session.field_values['selected_sbsd_lib'] = library
+            return self.get_screen(session, 'wrksbsd')
+        else:
+            session.message = f"Cannot display object type {obj_type}"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkobj')
