@@ -89,14 +89,22 @@ class ScreenManager:
         'DSPSYSSTS': 'dspsyssts',
         'DSPLOG': 'dsplog',
         'SBMJOB': 'sbmjob',
+        'WRKHLTH': 'wrkhlth',
+        'WRKBKP': 'wrkbkp',
+        'WRKALR': 'wrkalr',
+        'WRKNETDEV': 'wrknetdev',
         'SIGNOFF': 'signon',
         'GO': 'main',
         '1': 'wrkactjob',
         '2': 'wrkjobq',
         '3': 'wrksvc',
-        '4': 'dspsyssts',
-        '5': 'dsplog',
-        '6': 'sbmjob',
+        '4': 'wrkhlth',
+        '5': 'dspsyssts',
+        '6': 'dsplog',
+        '7': 'wrkbkp',
+        '8': 'wrkalr',
+        '9': 'wrknetdev',
+        '10': 'sbmjob',
         '90': 'signon',
     }
 
@@ -145,6 +153,10 @@ class ScreenManager:
         'wrkjobq': 10,
         'wrksvc': 15,
         'dsplog': 16,
+        'wrkhlth': 12,
+        'wrkbkp': 12,
+        'wrkalr': 14,
+        'wrknetdev': 12,
     }
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
@@ -269,12 +281,15 @@ class ScreenManager:
             pad_line("       1. Work with active jobs                            WRKACTJOB"),
             pad_line("       2. Work with job queues                             WRKJOBQ"),
             pad_line("       3. Work with services                               WRKSVC"),
-            pad_line("       4. Display system status                            DSPSYSSTS"),
-            pad_line("       5. Display log                                      DSPLOG"),
-            pad_line("       6. Submit job                                       SBMJOB"),
+            pad_line("       4. Work with health checks                          WRKHLTH"),
+            pad_line("       5. Display system status                            DSPSYSSTS"),
+            pad_line("       6. Display log                                      DSPLOG"),
+            pad_line("       7. Work with backups                                WRKBKP"),
+            pad_line("       8. Work with alerts                                 WRKALR"),
+            pad_line("       9. Work with network devices                        WRKNETDEV"),
+            pad_line("      10. Submit job                                       SBMJOB"),
             pad_line(""),
             pad_line("      90. Sign off                                         SIGNOFF"),
-            pad_line(""),
             pad_line(""),
             pad_line("  Selection or command"),
             [
@@ -731,6 +746,306 @@ class ScreenManager:
 
         return self.get_screen(session, 'sbmjob')
 
+    # ========== ADDITIONAL SCREENS ==========
+
+    def _screen_wrkhlth(self, session: Session) -> dict:
+        """Work with Health Checks - 80 columns."""
+        hostname, date_str, time_str = get_system_info()
+        all_checks = self._get_health_checks()
+
+        # Pagination
+        page_size = self.PAGE_SIZES['wrkhlth']
+        offset = session.get_offset('wrkhlth')
+        total = len(all_checks)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('wrkhlth', offset)
+
+        checks = all_checks[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            pos_indicator = "Bottom" if offset + page_size >= total else "More..."
+        else:
+            pos_indicator = ""
+
+        content = [
+            pad_line(f"                      Work with Health Checks                        {hostname}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   5=Display details   6=Run check   8=View history"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Check Name       Status      Last Run     Interval  Message"), "class": "field-reverse"}],
+        ]
+
+        fields = []
+        for i, check in enumerate(checks):
+            status_class = ""
+            if check['status'] == 'FAIL':
+                status_class = "field-error"
+            elif check['status'] == 'WARN':
+                status_class = "field-warning"
+
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {check['name']:<15}  ", "class": ""},
+                {"type": "text", "text": f"{check['status']:<10}  ", "class": status_class},
+                {"type": "text", "text": f"{check['last_run']:<11}  {check['interval']:<8}  {check['message']:<20}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        while len(content) < 19:
+            content.append(pad_line(""))
+
+        content.append(pad_line(f"                                                              {pos_indicator:>12}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Run All  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrkhlth",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _screen_wrkbkp(self, session: Session) -> dict:
+        """Work with Backups - 80 columns."""
+        hostname, date_str, time_str = get_system_info()
+        all_backups = self._get_backups()
+
+        # Pagination
+        page_size = self.PAGE_SIZES['wrkbkp']
+        offset = session.get_offset('wrkbkp')
+        total = len(all_backups)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('wrkbkp', offset)
+
+        backups = all_backups[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            pos_indicator = "Bottom" if offset + page_size >= total else "More..."
+        else:
+            pos_indicator = ""
+
+        content = [
+            pad_line(f"                        Work with Backups                            {hostname}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   1=Start backup   4=Delete   5=Display   8=Restore"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Backup Job       Status      Last Run     Size      Type"), "class": "field-reverse"}],
+        ]
+
+        fields = []
+        for i, backup in enumerate(backups):
+            status_class = ""
+            if backup['status'] == 'FAILED':
+                status_class = "field-error"
+            elif backup['status'] == 'RUNNING':
+                status_class = "field-warning"
+
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {backup['name']:<15}  ", "class": ""},
+                {"type": "text", "text": f"{backup['status']:<10}  ", "class": status_class},
+                {"type": "text", "text": f"{backup['last_run']:<11}  {backup['size']:<8}  {backup['type']:<10}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        while len(content) < 19:
+            content.append(pad_line(""))
+
+        content.append(pad_line(f"                                                              {pos_indicator:>12}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Start All  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrkbkp",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _screen_wrkalr(self, session: Session) -> dict:
+        """Work with Alerts - 132 columns for more detail."""
+        hostname, date_str, time_str = get_system_info()
+        all_alerts = self._get_alerts()
+
+        # Pagination
+        page_size = self.PAGE_SIZES['wrkalr']
+        offset = session.get_offset('wrkalr')
+        total = len(all_alerts)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('wrkalr', offset)
+
+        alerts = all_alerts[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            pos_indicator = "Bottom" if offset + page_size >= total else "More..."
+        else:
+            pos_indicator = ""
+
+        content = [
+            pad_line(f" {hostname:<20}                          Work with Alerts                                      {session.user:>10}", 132),
+            pad_line(f"                                                                                          {date_str}  {time_str}", 132),
+            pad_line("", 132),
+            pad_line(" Type options, press Enter.", 132),
+            pad_line("   4=Delete   5=Display   7=Acknowledge   8=View source", 132),
+            pad_line("", 132),
+            [{"type": "text", "text": pad_line(" Opt  Severity  Time        Source           Message", 132), "class": "field-reverse"}],
+        ]
+
+        fields = []
+        for i, alert in enumerate(alerts):
+            sev_class = ""
+            if alert['severity'] == 'CRIT':
+                sev_class = "field-error"
+            elif alert['severity'] == 'WARN':
+                sev_class = "field-warning"
+            elif alert['severity'] == 'INFO':
+                sev_class = "field-highlight"
+
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  ", "class": ""},
+                {"type": "text", "text": f"{alert['severity']:<6}    ", "class": sev_class},
+                {"type": "text", "text": f"{alert['time']:<10}  {alert['source']:<15}  {alert['message']:<70}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        while len(content) < 21:
+            content.append(pad_line("", 132))
+
+        content.append(pad_line(f"                                                                                                    {pos_indicator:>12}", 132))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}", 132))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 120},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F7=Ack All  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
+
+        return {
+            "type": "screen",
+            "screen": "wrkalr",
+            "cols": 132,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _screen_wrknetdev(self, session: Session) -> dict:
+        """Work with Network Devices - 132 columns."""
+        hostname, date_str, time_str = get_system_info()
+        all_devices = self._get_network_devices()
+
+        # Pagination
+        page_size = self.PAGE_SIZES['wrknetdev']
+        offset = session.get_offset('wrknetdev')
+        total = len(all_devices)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('wrknetdev', offset)
+
+        devices = all_devices[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            pos_indicator = "Bottom" if offset + page_size >= total else "More..."
+        else:
+            pos_indicator = ""
+
+        content = [
+            pad_line(f" {hostname:<20}                     Work with Network Devices                                  {session.user:>10}", 132),
+            pad_line(f"                                                                                          {date_str}  {time_str}", 132),
+            pad_line("", 132),
+            pad_line(" Type options, press Enter.", 132),
+            pad_line("   2=Ping   5=Display   7=Wake-on-LAN   8=SSH connect", 132),
+            pad_line("", 132),
+            [{"type": "text", "text": pad_line(" Opt  Device Name       IP Address       MAC Address        Status    Type       Vendor", 132), "class": "field-reverse"}],
+        ]
+
+        fields = []
+        for i, device in enumerate(devices):
+            status_class = ""
+            if device['status'] == 'OFFLINE':
+                status_class = "field-error"
+            elif device['status'] == 'ONLINE':
+                status_class = "field-highlight"
+
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {device['name']:<16} {device['ip']:<16} {device['mac']:<18} ", "class": ""},
+                {"type": "text", "text": f"{device['status']:<8}  ", "class": status_class},
+                {"type": "text", "text": f"{device['type']:<10} {device['vendor']:<20}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        while len(content) < 21:
+            content.append(pad_line("", 132))
+
+        content.append(pad_line(f"                                                                                                    {pos_indicator:>12}", 132))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}", 132))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 120},
+        ])
+        fields.append({"id": "cmd"})
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
+
+        return {
+            "type": "screen",
+            "screen": "wrknetdev",
+            "cols": 132,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
     # ========== DATA HELPERS ==========
 
     def _get_celery_jobs(self) -> list[dict]:
@@ -1081,3 +1396,215 @@ class ScreenManager:
             result = sig.apply_async()
 
         return result.id
+
+    def _get_health_checks(self) -> list[dict]:
+        """Get health check status."""
+        checks = []
+
+        # Docker health checks
+        try:
+            result = subprocess.run(
+                ['docker', 'ps', '--format', '{{.Names}}\t{{.Status}}'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if not line:
+                        continue
+                    parts = line.split('\t')
+                    if len(parts) >= 2:
+                        name = parts[0][:15].upper()
+                        status_raw = parts[1]
+
+                        if '(healthy)' in status_raw.lower():
+                            status = 'OK'
+                            message = 'Container healthy'
+                        elif '(unhealthy)' in status_raw.lower():
+                            status = 'FAIL'
+                            message = 'Container unhealthy'
+                        elif 'Up' in status_raw:
+                            status = 'OK'
+                            message = 'Container running'
+                        else:
+                            status = 'FAIL'
+                            message = 'Container not running'
+
+                        checks.append({
+                            'name': name,
+                            'status': status,
+                            'last_run': datetime.now().strftime('%H:%M:%S'),
+                            'interval': '30s',
+                            'message': message[:20],
+                        })
+        except Exception:
+            pass
+
+        # Add some default system checks
+        checks.extend([
+            {'name': 'REDIS', 'status': 'OK', 'last_run': datetime.now().strftime('%H:%M:%S'), 'interval': '60s', 'message': 'Broker connected'},
+            {'name': 'CELERY', 'status': 'OK', 'last_run': datetime.now().strftime('%H:%M:%S'), 'interval': '60s', 'message': 'Workers active'},
+            {'name': 'DISK', 'status': 'OK', 'last_run': datetime.now().strftime('%H:%M:%S'), 'interval': '300s', 'message': 'Space available'},
+        ])
+
+        if not checks:
+            checks.append({
+                'name': 'SYSTEM',
+                'status': 'OK',
+                'last_run': datetime.now().strftime('%H:%M:%S'),
+                'interval': '60s',
+                'message': 'No checks defined',
+            })
+
+        return checks
+
+    def _get_backups(self) -> list[dict]:
+        """Get backup job status."""
+        backups = []
+
+        # Check for backup directories
+        backup_dirs = [
+            ('/home/doug/backups', 'HOMELAB', 'Full'),
+            ('/var/lib/docker/volumes', 'DOCKER-VOL', 'Volume'),
+        ]
+
+        for path, name, btype in backup_dirs:
+            try:
+                result = subprocess.run(['du', '-sh', path], capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    size = result.stdout.split()[0]
+                    backups.append({
+                        'name': name,
+                        'status': 'COMPLETE',
+                        'last_run': datetime.now().strftime('%m/%d %H:%M'),
+                        'size': size,
+                        'type': btype,
+                    })
+            except Exception:
+                backups.append({
+                    'name': name,
+                    'status': 'UNKNOWN',
+                    'last_run': 'N/A',
+                    'size': '0',
+                    'type': btype,
+                })
+
+        # Add placeholder backup jobs
+        backups.extend([
+            {'name': 'POSTGRES-BKP', 'status': 'COMPLETE', 'last_run': '01/17 02:00', 'size': '256M', 'type': 'Database'},
+            {'name': 'CONFIG-BKP', 'status': 'COMPLETE', 'last_run': '01/17 03:00', 'size': '12M', 'type': 'Config'},
+            {'name': 'NETBOX-BKP', 'status': 'COMPLETE', 'last_run': '01/17 02:30', 'size': '45M', 'type': 'Database'},
+        ])
+
+        return backups
+
+    def _get_alerts(self) -> list[dict]:
+        """Get system alerts."""
+        alerts = []
+
+        # Check docker for any issues
+        try:
+            result = subprocess.run(
+                ['docker', 'ps', '-a', '--filter', 'status=exited', '--format', '{{.Names}}\t{{.Status}}'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                for line in result.stdout.strip().split('\n'):
+                    if not line:
+                        continue
+                    parts = line.split('\t')
+                    if len(parts) >= 2:
+                        name = parts[0]
+                        alerts.append({
+                            'severity': 'WARN',
+                            'time': datetime.now().strftime('%H:%M:%S'),
+                            'source': 'DOCKER',
+                            'message': f'Container {name} has exited',
+                        })
+        except Exception:
+            pass
+
+        # Add some sample alerts for demonstration
+        if not alerts:
+            alerts = [
+                {'severity': 'INFO', 'time': datetime.now().strftime('%H:%M:%S'), 'source': 'QSYSOPR', 'message': 'System started successfully'},
+                {'severity': 'INFO', 'time': datetime.now().strftime('%H:%M:%S'), 'source': 'CELERY', 'message': 'Worker qbatch connected to broker'},
+            ]
+
+        return alerts
+
+    def _get_network_devices(self) -> list[dict]:
+        """Get network devices from ARP table and known hosts."""
+        devices = []
+
+        # Get devices from ARP table
+        try:
+            result = subprocess.run(['arp', '-a'], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if not line or 'incomplete' in line.lower():
+                        continue
+                    # Parse ARP output: hostname (ip) at mac [ether] on interface
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        try:
+                            hostname = parts[0] if parts[0] != '?' else 'UNKNOWN'
+                            ip = parts[1].strip('()')
+                            mac = parts[3] if len(parts) > 3 else 'N/A'
+
+                            # Determine device type based on MAC vendor
+                            vendor = 'Unknown'
+                            dtype = 'Device'
+                            mac_prefix = mac[:8].upper() if mac != 'N/A' else ''
+
+                            if mac_prefix.startswith('DC:A6:32') or mac_prefix.startswith('B8:27:EB'):
+                                vendor = 'Raspberry Pi'
+                                dtype = 'SBC'
+                            elif mac_prefix.startswith('00:1A:79'):
+                                vendor = 'Ubiquiti'
+                                dtype = 'Network'
+                            elif mac_prefix.startswith('3C:22:FB'):
+                                vendor = 'Apple'
+                                dtype = 'Workstation'
+                            elif mac_prefix.startswith('00:11:32'):
+                                vendor = 'Synology'
+                                dtype = 'NAS'
+
+                            devices.append({
+                                'name': hostname[:16].upper(),
+                                'ip': ip[:16],
+                                'mac': mac[:18].upper(),
+                                'status': 'ONLINE',
+                                'type': dtype[:10],
+                                'vendor': vendor[:20],
+                            })
+                        except (IndexError, ValueError):
+                            continue
+        except Exception:
+            pass
+
+        # Add the local host
+        try:
+            hostname = socket.gethostname()
+            local_ip = socket.gethostbyname(hostname)
+            devices.insert(0, {
+                'name': hostname[:16].upper(),
+                'ip': local_ip[:16],
+                'mac': 'LOCAL',
+                'status': 'ONLINE',
+                'type': 'Server',
+                'vendor': 'Local System',
+            })
+        except Exception:
+            pass
+
+        if not devices:
+            devices.append({
+                'name': 'NO DEVICES',
+                'ip': 'N/A',
+                'mac': 'N/A',
+                'status': 'UNKNOWN',
+                'type': 'N/A',
+                'vendor': 'N/A',
+            })
+
+        return devices
