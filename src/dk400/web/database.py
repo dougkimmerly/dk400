@@ -2152,7 +2152,7 @@ def list_message_queues(library: str = None) -> list[dict]:
                         WHERE table_schema = %s AND table_name = '_msgq'
                     )
                 """, (lib_schema,))
-                if not cursor.fetchone()[0]:
+                if not cursor.fetchone()['exists']:
                     continue
 
                 query = sql.SQL("SELECT * FROM {}._msgq ORDER BY name").format(
@@ -2560,7 +2560,7 @@ def list_data_areas(library: str = None) -> list[dict]:
                         WHERE table_schema = %s AND table_name = '_dtaara'
                     )
                 """, (lib_schema,))
-                if not cursor.fetchone()[0]:
+                if not cursor.fetchone()['exists']:
                     continue
 
                 query = sql.SQL("SELECT * FROM {}._dtaara ORDER BY name").format(
@@ -2716,7 +2716,7 @@ def list_job_descriptions(library: str = None) -> list[dict]:
                         WHERE table_schema = %s AND table_name = '_jobd'
                     )
                 """, (lib_schema,))
-                if not cursor.fetchone()[0]:
+                if not cursor.fetchone()['exists']:
                     continue
 
                 query = sql.SQL("SELECT * FROM {}._jobd ORDER BY name").format(
@@ -2881,7 +2881,7 @@ def list_output_queues(library: str = None) -> list[dict]:
                         WHERE table_schema = %s AND table_name = '_outq'
                     )
                 """, (lib_schema,))
-                if not cursor.fetchone()[0]:
+                if not cursor.fetchone()['exists']:
                     continue
 
                 query = sql.SQL("SELECT * FROM {}._outq ORDER BY name").format(
@@ -4269,7 +4269,7 @@ def list_query_definitions(library: str = None, created_by: str = None) -> list[
                         WHERE table_schema = %s AND table_name = '_qrydfn'
                     )
                 """, (lib_schema,))
-                if not cursor.fetchone()[0]:
+                if not cursor.fetchone()['exists']:
                     continue
 
                 # Build query for this library
