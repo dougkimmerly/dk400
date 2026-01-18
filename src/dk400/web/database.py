@@ -4724,12 +4724,15 @@ def execute_query_definition(
             # Get column names from cursor description
             col_names = [desc[0].upper() for desc in cursor.description] if cursor.description else []
 
-            # Update last_run_at
-            cursor.execute("""
-                UPDATE query_definitions
-                SET last_run_at = CURRENT_TIMESTAMP
-                WHERE name = %s AND library = %s
-            """, (name.upper(), library.upper()))
+            # Update last_run_at in the library's _qrydfn table
+            try:
+                cursor.execute(f"""
+                    UPDATE {library.lower()}._qrydfn
+                    SET last_run = CURRENT_TIMESTAMP
+                    WHERE name = %s
+                """, (name.upper(),))
+            except Exception:
+                pass  # Ignore if table doesn't exist
 
         # Convert dict keys to uppercase to match col_names
         return True, [{k.upper(): v for k, v in dict(row).items()} for row in rows], col_names
