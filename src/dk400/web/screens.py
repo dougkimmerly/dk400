@@ -6,9 +6,12 @@ AS/400-style screen layouts with fixed 80 or 132 column grids.
 import os
 import socket
 import subprocess
+import logging
 from datetime import datetime
 from typing import Any, Optional
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 from celery import Celery
 
@@ -334,7 +337,7 @@ class ScreenManager:
 
             # Check if we have a focused field that has parameter prompts
             active_field = fields.get('_active_field', '').lower()
-            logger.info(f"F4 pressed: screen={screen}, active_field='{active_field}', fields={list(fields.keys())}")
+            print(f"F4 DEBUG: screen={screen}, active_field='{active_field}', fields={list(fields.keys())}", flush=True)
 
             # If on command line or no active field, show command list
             if not active_field or active_field == 'cmd':
@@ -344,15 +347,15 @@ class ScreenManager:
 
             # Check if this screen has a command mapping
             command_name = self.SCREEN_COMMAND_MAP.get(screen)
-            logger.info(f"F4: command_name={command_name} for screen={screen}")
+            print(f"F4 DEBUG: command_name={command_name} for screen={screen}", flush=True)
             if command_name:
                 # Map field ID to parameter name
                 parm_name = self.FIELD_PARM_MAP.get(active_field, active_field.upper())
-                logger.info(f"F4: parm_name={parm_name} for active_field={active_field}")
+                print(f"F4 DEBUG: parm_name={parm_name} for active_field={active_field}", flush=True)
 
                 # Check if valid values exist for this parameter
                 valid_values = get_parameter_valid_values(command_name, parm_name)
-                logger.info(f"F4: valid_values count={len(valid_values) if valid_values else 0}")
+                print(f"F4 DEBUG: valid_values count={len(valid_values) if valid_values else 0}", flush=True)
                 if valid_values:
                     # Show parameter value prompt
                     session.field_values['f4_command'] = command_name
