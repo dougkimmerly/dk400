@@ -8345,12 +8345,12 @@ class ScreenManager:
         lib_type = fields.get('type', '*PROD').strip().upper() or '*PROD'
         text = fields.get('text', '').strip()
 
-        # Update library metadata in the libraries table
+        # Update library metadata in the _lib table
         try:
             from src.dk400.web.database import get_cursor
             with get_cursor() as cursor:
                 cursor.execute("""
-                    UPDATE libraries
+                    UPDATE qsys._lib
                     SET type = %s, text = %s
                     WHERE name = %s
                 """, (lib_type, text, lib_name))

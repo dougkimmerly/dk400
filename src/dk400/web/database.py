@@ -54,8 +54,8 @@ CREATE TABLE IF NOT EXISTS qsys.users (
 CREATE INDEX IF NOT EXISTS idx_users_status ON qsys.users(status);
 CREATE INDEX IF NOT EXISTS idx_users_group ON qsys.users(group_profile);
 
--- Job history table
-CREATE TABLE IF NOT EXISTS qsys.job_history (
+-- Job history table (QJOBHST)
+CREATE TABLE IF NOT EXISTS qsys._jobhst (
     id SERIAL PRIMARY KEY,
     job_name VARCHAR(50) NOT NULL,
     job_type VARCHAR(20) NOT NULL,
@@ -68,8 +68,8 @@ CREATE TABLE IF NOT EXISTS qsys.job_history (
     error TEXT
 );
 
--- Audit log table
-CREATE TABLE IF NOT EXISTS qsys.audit_log (
+-- Audit/History log table (QHST)
+CREATE TABLE IF NOT EXISTS qsys.qhst (
     id SERIAL PRIMARY KEY,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     username VARCHAR(10),
@@ -78,11 +78,11 @@ CREATE TABLE IF NOT EXISTS qsys.audit_log (
     ip_address VARCHAR(45)
 );
 
-CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON qsys.audit_log(timestamp);
-CREATE INDEX IF NOT EXISTS idx_audit_username ON qsys.audit_log(username);
+CREATE INDEX IF NOT EXISTS idx_qhst_timestamp ON qsys.qhst(timestamp);
+CREATE INDEX IF NOT EXISTS idx_qhst_username ON qsys.qhst(username);
 
--- Object authorities table
-CREATE TABLE IF NOT EXISTS qsys.object_authorities (
+-- Object authorities table (QOBJAUT)
+CREATE TABLE IF NOT EXISTS qsys._objaut (
     id SERIAL PRIMARY KEY,
     object_type VARCHAR(20) NOT NULL,
     object_name VARCHAR(128) NOT NULL,
@@ -93,13 +93,13 @@ CREATE TABLE IF NOT EXISTS qsys.object_authorities (
     UNIQUE(object_type, object_name, username)
 );
 
-CREATE INDEX IF NOT EXISTS idx_objauth_object ON qsys.object_authorities(object_type, object_name);
-CREATE INDEX IF NOT EXISTS idx_objauth_user ON qsys.object_authorities(username);
+CREATE INDEX IF NOT EXISTS idx_objaut_object ON qsys._objaut(object_type, object_name);
+CREATE INDEX IF NOT EXISTS idx_objaut_user ON qsys._objaut(username);
 
 -- =============================================================================
--- Libraries Registry
+-- Libraries Registry (QLIB)
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS qsys.libraries (
+CREATE TABLE IF NOT EXISTS qsys._lib (
     name VARCHAR(10) PRIMARY KEY,
     type VARCHAR(10) DEFAULT '*PROD',
     text VARCHAR(50) DEFAULT '',
@@ -131,9 +131,9 @@ INSERT INTO qsys.system_values (name, value, description, category) VALUES
 ON CONFLICT (name) DO NOTHING;
 
 -- =============================================================================
--- Spooled Files (centralized - references library-based output queues)
+-- Spooled Files (QSPLF - centralized, references library-based output queues)
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS qsys.spooled_files (
+CREATE TABLE IF NOT EXISTS qsys._splf (
     id SERIAL PRIMARY KEY,
     name VARCHAR(10) NOT NULL,
     file_number INTEGER NOT NULL DEFAULT 1,
@@ -152,14 +152,14 @@ CREATE TABLE IF NOT EXISTS qsys.spooled_files (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_splf_job ON qsys.spooled_files(job_name);
-CREATE INDEX IF NOT EXISTS idx_splf_outq ON qsys.spooled_files(output_queue, output_queue_lib, status);
-CREATE INDEX IF NOT EXISTS idx_splf_user ON qsys.spooled_files(created_by);
+CREATE INDEX IF NOT EXISTS idx_splf_job ON qsys._splf(job_name);
+CREATE INDEX IF NOT EXISTS idx_splf_outq ON qsys._splf(output_queue, output_queue_lib, status);
+CREATE INDEX IF NOT EXISTS idx_splf_user ON qsys._splf(created_by);
 
 -- =============================================================================
--- Commands (AS/400 *CMD objects in QSYS)
+-- Commands (QCMD - AS/400 *CMD objects in QSYS)
 -- =============================================================================
-CREATE TABLE IF NOT EXISTS qsys.command_info (
+CREATE TABLE IF NOT EXISTS qsys._cmd (
     command_name VARCHAR(10) PRIMARY KEY,
     command_library VARCHAR(10) DEFAULT 'QSYS',
     text_description VARCHAR(50) DEFAULT '',
@@ -172,8 +172,8 @@ CREATE TABLE IF NOT EXISTS qsys.command_info (
     created_by VARCHAR(10) DEFAULT 'SYSTEM'
 );
 
-CREATE TABLE IF NOT EXISTS qsys.command_parm_info (
-    command_name VARCHAR(10) NOT NULL REFERENCES qsys.command_info(command_name) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS qsys._cmdparm (
+    command_name VARCHAR(10) NOT NULL REFERENCES qsys._cmd(command_name) ON DELETE CASCADE,
     parm_name VARCHAR(10) NOT NULL,
     ordinal_position INTEGER NOT NULL,
     data_type VARCHAR(10) DEFAULT '*CHAR',
@@ -187,9 +187,9 @@ CREATE TABLE IF NOT EXISTS qsys.command_parm_info (
     PRIMARY KEY (command_name, parm_name)
 );
 
-CREATE INDEX IF NOT EXISTS idx_cmd_parm_ord ON qsys.command_parm_info(command_name, ordinal_position);
+CREATE INDEX IF NOT EXISTS idx_cmdparm_ord ON qsys._cmdparm(command_name, ordinal_position);
 
-CREATE TABLE IF NOT EXISTS qsys.parm_valid_values (
+CREATE TABLE IF NOT EXISTS qsys._prmval (
     command_name VARCHAR(10) NOT NULL,
     parm_name VARCHAR(10) NOT NULL,
     valid_value VARCHAR(50) NOT NULL,
@@ -197,15 +197,15 @@ CREATE TABLE IF NOT EXISTS qsys.parm_valid_values (
     ordinal_position INTEGER DEFAULT 0,
     PRIMARY KEY (command_name, parm_name, valid_value),
     FOREIGN KEY (command_name, parm_name)
-        REFERENCES qsys.command_parm_info(command_name, parm_name) ON DELETE CASCADE
+        REFERENCES qsys._cmdparm(command_name, parm_name) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_parm_val_ord ON qsys.parm_valid_values(command_name, parm_name, ordinal_position);
+CREATE INDEX IF NOT EXISTS idx_prmval_ord ON qsys._prmval(command_name, parm_name, ordinal_position);
 
 -- =============================================================================
 -- Default Libraries
 -- =============================================================================
-INSERT INTO qsys.libraries (name, type, text, created_by) VALUES
+INSERT INTO qsys._lib (name, type, text, created_by) VALUES
     ('QSYS', '*PROD', 'System Library', 'QSECOFR'),
     ('QGPL', '*PROD', 'General Purpose Library', 'QSECOFR'),
     ('QUSRSYS', '*PROD', 'User System Library', 'QSECOFR')
@@ -387,6 +387,9 @@ def init_database() -> bool:
         # Migrate data from public to qsys (for upgrades from older versions)
         _migrate_public_to_qsys()
 
+        # Rename tables to AS/400-style names (for upgrades)
+        _rename_tables_to_as400_style()
+
         # Add library list columns to users (for upgrades)
         _add_library_list_columns()
 
@@ -415,21 +418,21 @@ def _migrate_public_to_qsys():
          'username, password_hash, salt, user_class, status, description, group_profile, created, last_signon, signon_attempts, password_expires'),
         ('public.system_values', 'qsys.system_values',
          'name, value, description, category, updated_at, updated_by'),
-        ('public.libraries', 'qsys.libraries',
+        ('public.libraries', 'qsys._lib',
          'name, type, text, asp_number, create_authority, created, created_by'),
-        ('public.object_authorities', 'qsys.object_authorities',
+        ('public.object_authorities', 'qsys._objaut',
          'id, object_type, object_name, username, authority, granted_by, granted_at'),
-        ('public.job_history', 'qsys.job_history',
+        ('public.job_history', 'qsys._jobhst',
          'id, job_name, job_type, status, submitted_by, submitted_at, started_at, completed_at, result, error'),
-        ('public.audit_log', 'qsys.audit_log',
+        ('public.audit_log', 'qsys.qhst',
          'id, timestamp, username, action, details, ip_address'),
-        ('public.spooled_files', 'qsys.spooled_files',
+        ('public.spooled_files', 'qsys._splf',
          'id, name, file_number, job_name, job_id, output_queue, output_queue_lib, status, user_data, form_type, copies, pages, total_records, content, created_by, created_at'),
-        ('public.command_info', 'qsys.command_info',
+        ('public.command_info', 'qsys._cmd',
          'command_name, command_library, text_description, screen_name, processing_program, allow_run_interactive, allow_run_batch, threadsafe, created, created_by'),
-        ('public.command_parm_info', 'qsys.command_parm_info',
+        ('public.command_parm_info', 'qsys._cmdparm',
          'command_name, parm_name, ordinal_position, data_type, length, decimal_positions, default_value, prompt_text, is_required, min_value, max_value'),
-        ('public.parm_valid_values', 'qsys.parm_valid_values',
+        ('public.parm_valid_values', 'qsys._prmval',
          'command_name, parm_name, valid_value, text_description, ordinal_position'),
     ]
 
@@ -487,6 +490,70 @@ def _add_library_list_columns():
         logger.info("Library list columns added to users table")
     except Exception as e:
         logger.warning(f"Adding library list columns: {e}")
+
+
+def _rename_tables_to_as400_style():
+    """
+    Rename existing qsys tables to AS/400-style names.
+    This handles upgrades from older versions with non-AS/400 names.
+    """
+    renames = [
+        # (old_name, new_name)
+        ('qsys._jobhst', 'qsys._jobhst'),
+        ('qsys.qhst', 'qsys.qhst'),
+        ('qsys._objaut', 'qsys._objaut'),
+        ('qsys._lib', 'qsys._lib'),
+        ('qsys._splf', 'qsys._splf'),
+        ('qsys._cmd', 'qsys._cmd'),
+        ('qsys._cmdparm', 'qsys._cmdparm'),
+        ('qsys._prmval', 'qsys._prmval'),
+    ]
+
+    try:
+        with get_cursor(dict_cursor=False) as cursor:
+            for old_name, new_name in renames:
+                old_schema, old_table = old_name.split('.')
+                new_schema, new_table = new_name.split('.')
+
+                # Check if old table exists
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_schema = %s AND table_name = %s
+                    )
+                """, (old_schema, old_table))
+
+                if not cursor.fetchone()[0]:
+                    continue  # Old table doesn't exist, skip
+
+                # Check if new table already exists
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_schema = %s AND table_name = %s
+                    )
+                """, (new_schema, new_table))
+
+                if cursor.fetchone()[0]:
+                    # New table exists - migrate data and drop old
+                    logger.info(f"New table {new_name} exists, migrating data from {old_name}")
+                    try:
+                        cursor.execute(f"INSERT INTO {new_name} SELECT * FROM {old_name} ON CONFLICT DO NOTHING")
+                        cursor.execute(f"DROP TABLE {old_name} CASCADE")
+                        logger.info(f"Migrated data and dropped {old_name}")
+                    except Exception as e:
+                        logger.warning(f"Could not migrate from {old_name}: {e}")
+                else:
+                    # Rename old table to new name
+                    try:
+                        cursor.execute(f"ALTER TABLE {old_name} RENAME TO {new_table}")
+                        logger.info(f"Renamed {old_name} to {new_name}")
+                    except Exception as e:
+                        logger.warning(f"Could not rename {old_name} to {new_name}: {e}")
+
+        logger.info("AS/400-style table rename completed")
+    except Exception as e:
+        logger.warning(f"AS/400-style table rename: {e}")
 
 
 def _create_default_system_objects():
@@ -658,13 +725,13 @@ def create_library(name: str, text: str = '', lib_type: str = '*PROD',
     try:
         with get_cursor() as cursor:
             # Check if library already exists
-            cursor.execute("SELECT name FROM qsys.libraries WHERE name = %s", (lib,))
+            cursor.execute("SELECT name FROM qsys._lib WHERE name = %s", (lib,))
             if cursor.fetchone():
                 return False, f"Library {lib} already exists"
 
             # Insert library record
             cursor.execute("""
-                INSERT INTO qsys.libraries (name, type, text, asp_number, create_authority, created_by)
+                INSERT INTO qsys._lib (name, type, text, asp_number, create_authority, created_by)
                 VALUES (%s, %s, %s, %s, %s, %s)
             """, (lib, lib_type, text, asp_number, create_authority, created_by))
 
@@ -695,7 +762,7 @@ def delete_library(name: str) -> tuple[bool, str]:
 
         with get_cursor(dict_cursor=False) as cursor:
             # Check if library exists
-            cursor.execute("SELECT name FROM qsys.libraries WHERE name = %s", (lib,))
+            cursor.execute("SELECT name FROM qsys._lib WHERE name = %s", (lib,))
             if not cursor.fetchone():
                 return False, f"Library {lib} not found"
 
@@ -705,7 +772,7 @@ def delete_library(name: str) -> tuple[bool, str]:
             ))
 
             # Delete library record
-            cursor.execute("DELETE FROM qsys.libraries WHERE name = %s", (lib,))
+            cursor.execute("DELETE FROM qsys._lib WHERE name = %s", (lib,))
 
         return True, f"Library {lib} deleted"
 
@@ -720,7 +787,7 @@ def list_libraries() -> list[dict]:
         with get_cursor() as cursor:
             cursor.execute("""
                 SELECT name, type, text, asp_number, created, created_by
-                FROM qsys.libraries
+                FROM qsys._lib
                 ORDER BY name
             """)
             return [dict(row) for row in cursor.fetchall()]
@@ -735,7 +802,7 @@ def get_library(name: str) -> Optional[dict]:
         with get_cursor() as cursor:
             cursor.execute("""
                 SELECT name, type, text, asp_number, created, created_by
-                FROM qsys.libraries
+                FROM qsys._lib
                 WHERE name = %s
             """, (name.upper(),))
             row = cursor.fetchone()
@@ -749,7 +816,7 @@ def library_exists(name: str) -> bool:
     """Check if a library exists."""
     try:
         with get_cursor() as cursor:
-            cursor.execute("SELECT 1 FROM qsys.libraries WHERE name = %s", (name.upper(),))
+            cursor.execute("SELECT 1 FROM qsys._lib WHERE name = %s", (name.upper(),))
             return cursor.fetchone() is not None
     except Exception:
         return False
@@ -924,9 +991,9 @@ USER_CLASS_GRANTS = {
         # Security Officer - full access to everything
         'tables': {
             'qsys.users': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-            'qsys.job_history': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-            'qsys.audit_log': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-            'qsys.object_authorities': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+            'qsys._jobhst': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+            'qsys.qhst': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+            'qsys._objaut': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         },
         'special': ['CREATEROLE'],  # Can manage other roles
     },
@@ -934,9 +1001,9 @@ USER_CLASS_GRANTS = {
         # Security Admin - can manage users but not full system access
         'tables': {
             'qsys.users': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-            'qsys.job_history': ['SELECT'],
-            'qsys.audit_log': ['SELECT', 'INSERT'],
-            'qsys.object_authorities': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+            'qsys._jobhst': ['SELECT'],
+            'qsys.qhst': ['SELECT', 'INSERT'],
+            'qsys._objaut': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
         },
         'special': [],
     },
@@ -944,9 +1011,9 @@ USER_CLASS_GRANTS = {
         # Programmer - full access to app tables, read users
         'tables': {
             'qsys.users': ['SELECT'],
-            'qsys.job_history': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
-            'qsys.audit_log': ['SELECT', 'INSERT'],
-            'qsys.object_authorities': ['SELECT'],
+            'qsys._jobhst': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+            'qsys.qhst': ['SELECT', 'INSERT'],
+            'qsys._objaut': ['SELECT'],
         },
         'special': [],
     },
@@ -954,9 +1021,9 @@ USER_CLASS_GRANTS = {
         # System Operator - operational access
         'tables': {
             'qsys.users': ['SELECT'],
-            'qsys.job_history': ['SELECT', 'INSERT', 'UPDATE'],
-            'qsys.audit_log': ['SELECT', 'INSERT'],
-            'qsys.object_authorities': ['SELECT'],
+            'qsys._jobhst': ['SELECT', 'INSERT', 'UPDATE'],
+            'qsys.qhst': ['SELECT', 'INSERT'],
+            'qsys._objaut': ['SELECT'],
         },
         'special': [],
     },
@@ -964,9 +1031,9 @@ USER_CLASS_GRANTS = {
         # Regular user - read-only on most tables
         'tables': {
             'qsys.users': [],  # No direct access to users table
-            'qsys.job_history': ['SELECT'],
-            'qsys.audit_log': [],  # No access to audit log
-            'qsys.object_authorities': ['SELECT'],
+            'qsys._jobhst': ['SELECT'],
+            'qsys.qhst': [],  # No access to audit log
+            'qsys._objaut': ['SELECT'],
         },
         'special': [],
     },
@@ -1295,7 +1362,7 @@ def create_schema(schema_name: str, owner: str = None, description: str = '') ->
 
             # Store schema info in object_authorities for tracking
             cursor.execute("""
-                INSERT INTO qsys.object_authorities (object_type, object_name, username, authority, granted_by)
+                INSERT INTO qsys._objaut (object_type, object_name, username, authority, granted_by)
                 VALUES ('SCHEMA', %s, %s, '*OWNER', %s)
                 ON CONFLICT (object_type, object_name, username) DO UPDATE SET authority = '*OWNER'
             """, (schema_name.upper(), owner.upper() if owner else 'DK400', 'DK400'))
@@ -1374,7 +1441,7 @@ def drop_schema(schema_name: str, cascade: bool = False) -> tuple[bool, str]:
 
             # Remove from object_authorities
             cursor.execute(
-                "DELETE FROM qsys.object_authorities WHERE object_type = 'SCHEMA' AND object_name = %s",
+                "DELETE FROM qsys._objaut WHERE object_type = 'SCHEMA' AND object_name = %s",
                 (schema_name.upper(),)
             )
 
@@ -1403,7 +1470,7 @@ def list_schemas() -> list[dict]:
                     (SELECT COUNT(*) FROM information_schema.tables t
                      WHERE t.table_schema = s.schema_name) as table_count
                 FROM information_schema.schemata s
-                LEFT JOIN qsys.object_authorities oa
+                LEFT JOIN qsys._objaut oa
                     ON oa.object_type = 'SCHEMA'
                     AND oa.object_name = UPPER(s.schema_name)
                 WHERE s.schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
@@ -1620,12 +1687,12 @@ def grant_object_authority(
             # Record in object_authorities table
             if authority == '*EXCLUDE':
                 cursor.execute("""
-                    DELETE FROM qsys.object_authorities
+                    DELETE FROM qsys._objaut
                     WHERE object_type = %s AND object_name = %s AND username = %s
                 """, (object_type, object_name.upper(), username))
             else:
                 cursor.execute("""
-                    INSERT INTO qsys.object_authorities (object_type, object_name, username, authority, granted_by)
+                    INSERT INTO qsys._objaut (object_type, object_name, username, authority, granted_by)
                     VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (object_type, object_name, username)
                     DO UPDATE SET authority = %s, granted_by = %s, granted_at = CURRENT_TIMESTAMP
@@ -1661,7 +1728,7 @@ def get_object_authorities(object_type: str = None, object_name: str = None, use
     authorities = []
     try:
         with get_cursor() as cursor:
-            query = "SELECT * FROM qsys.object_authorities WHERE 1=1"
+            query = "SELECT * FROM qsys._objaut WHERE 1=1"
             params = []
 
             if object_type:
@@ -2987,7 +3054,7 @@ def delete_output_queue(name: str, library: str = 'QGPL') -> tuple[bool, str]:
         with get_cursor() as cursor:
             # Check for spooled files (spooled_files table stays centralized)
             cursor.execute(
-                "SELECT COUNT(*) as cnt FROM qsys.spooled_files WHERE output_queue = %s AND output_queue_lib = %s",
+                "SELECT COUNT(*) as cnt FROM qsys._splf WHERE output_queue = %s AND output_queue_lib = %s",
                 (name, library)
             )
             result = cursor.fetchone()
@@ -3042,7 +3109,7 @@ def list_output_queues(library: str = None) -> list[dict]:
                 for row in cursor.fetchall():
                     # Get spooled file count (centralized table)
                     cursor.execute(
-                        "SELECT COUNT(*) as cnt FROM qsys.spooled_files WHERE output_queue = %s AND output_queue_lib = %s",
+                        "SELECT COUNT(*) as cnt FROM qsys._splf WHERE output_queue = %s AND output_queue_lib = %s",
                         (row['name'], lib)
                     )
                     cnt_result = cursor.fetchone()
@@ -3118,7 +3185,7 @@ def create_spooled_file(name: str, job_name: str, content: str, job_id: str = No
         with get_cursor() as cursor:
             # Get next file number for this job
             cursor.execute(
-                "SELECT COALESCE(MAX(file_number), 0) + 1 as next_num FROM qsys.spooled_files WHERE job_name = %s",
+                "SELECT COALESCE(MAX(file_number), 0) + 1 as next_num FROM qsys._splf WHERE job_name = %s",
                 (job_name,)
             )
             file_number = cursor.fetchone()['next_num']
@@ -3128,7 +3195,7 @@ def create_spooled_file(name: str, job_name: str, content: str, job_id: str = No
             total_records = len(content.split('\n'))
 
             cursor.execute("""
-                INSERT INTO qsys.spooled_files (name, file_number, job_name, job_id, output_queue,
+                INSERT INTO qsys._splf (name, file_number, job_name, job_id, output_queue,
                                            output_queue_lib, user_data, pages, total_records, content, created_by)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
@@ -3144,7 +3211,7 @@ def get_spooled_file(splf_id: int) -> dict | None:
     """Get a spooled file by ID."""
     try:
         with get_cursor() as cursor:
-            cursor.execute("SELECT * FROM qsys.spooled_files WHERE id = %s", (splf_id,))
+            cursor.execute("SELECT * FROM qsys._splf WHERE id = %s", (splf_id,))
             row = cursor.fetchone()
             if row:
                 return dict(row)
@@ -3158,7 +3225,7 @@ def list_spooled_files(user: str = None, output_queue: str = None, job_name: str
     files = []
     try:
         with get_cursor() as cursor:
-            query = "SELECT * FROM qsys.spooled_files WHERE 1=1"
+            query = "SELECT * FROM qsys._splf WHERE 1=1"
             params = []
 
             if user:
@@ -3188,7 +3255,7 @@ def delete_spooled_file(splf_id: int) -> tuple[bool, str]:
     """Delete a spooled file (DLTSPLF)."""
     try:
         with get_cursor() as cursor:
-            cursor.execute("DELETE FROM qsys.spooled_files WHERE id = %s", (splf_id,))
+            cursor.execute("DELETE FROM qsys._splf WHERE id = %s", (splf_id,))
             if cursor.rowcount == 0:
                 return False, "Spooled file not found"
         return True, "Spooled file deleted"
@@ -3201,7 +3268,7 @@ def hold_spooled_file(splf_id: int) -> tuple[bool, str]:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "UPDATE qsys.spooled_files SET status = '*HLD' WHERE id = %s",
+                "UPDATE qsys._splf SET status = '*HLD' WHERE id = %s",
                 (splf_id,)
             )
             if cursor.rowcount == 0:
@@ -3216,7 +3283,7 @@ def release_spooled_file(splf_id: int) -> tuple[bool, str]:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "UPDATE qsys.spooled_files SET status = '*RDY' WHERE id = %s",
+                "UPDATE qsys._splf SET status = '*RDY' WHERE id = %s",
                 (splf_id,)
             )
             if cursor.rowcount == 0:
@@ -3745,14 +3812,14 @@ def list_commands(filter_prefix: str = '') -> list[dict]:
             if filter_prefix:
                 cursor.execute("""
                     SELECT COMMAND_NAME, COMMAND_LIBRARY, TEXT_DESCRIPTION, SCREEN_NAME
-                    FROM qsys.command_info
+                    FROM qsys._cmd
                     WHERE COMMAND_NAME LIKE %s
                     ORDER BY COMMAND_NAME
                 """, (f"{filter_prefix}%",))
             else:
                 cursor.execute("""
                     SELECT COMMAND_NAME, COMMAND_LIBRARY, TEXT_DESCRIPTION, SCREEN_NAME
-                    FROM qsys.command_info
+                    FROM qsys._cmd
                     ORDER BY COMMAND_NAME
                 """)
             for row in cursor.fetchall():
@@ -3769,7 +3836,7 @@ def get_command(command_name: str) -> Optional[dict]:
     try:
         with get_cursor() as cursor:
             cursor.execute("""
-                SELECT * FROM qsys.command_info WHERE COMMAND_NAME = %s
+                SELECT * FROM qsys._cmd WHERE COMMAND_NAME = %s
             """, (command_name,))
             row = cursor.fetchone()
             if row:
@@ -3787,7 +3854,7 @@ def get_command_parameters(command_name: str) -> list[dict]:
     try:
         with get_cursor() as cursor:
             cursor.execute("""
-                SELECT * FROM qsys.command_parm_info
+                SELECT * FROM qsys._cmdparm
                 WHERE COMMAND_NAME = %s
                 ORDER BY ORDINAL_POSITION
             """, (command_name,))
@@ -3808,7 +3875,7 @@ def get_parameter_valid_values(command_name: str, parm_name: str) -> list[dict]:
         with get_cursor() as cursor:
             cursor.execute("""
                 SELECT VALID_VALUE, TEXT_DESCRIPTION
-                FROM qsys.parm_valid_values
+                FROM qsys._prmval
                 WHERE COMMAND_NAME = %s AND PARM_NAME = %s
                 ORDER BY ORDINAL_POSITION, VALID_VALUE
             """, (command_name, parm_name))
@@ -3834,7 +3901,7 @@ def create_command(
     try:
         with get_cursor() as cursor:
             cursor.execute("""
-                INSERT INTO qsys.command_info (COMMAND_NAME, COMMAND_LIBRARY, TEXT_DESCRIPTION,
+                INSERT INTO qsys._cmd (COMMAND_NAME, COMMAND_LIBRARY, TEXT_DESCRIPTION,
                                           SCREEN_NAME, PROCESSING_PROGRAM,
                                           ALLOW_RUN_INTERACTIVE, ALLOW_RUN_BATCH)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -3868,7 +3935,7 @@ def add_command_parameter(
     try:
         with get_cursor() as cursor:
             cursor.execute("""
-                INSERT INTO qsys.command_parm_info
+                INSERT INTO qsys._cmdparm
                     (COMMAND_NAME, PARM_NAME, ORDINAL_POSITION, DATA_TYPE, LENGTH,
                      DEFAULT_VALUE, PROMPT_TEXT, IS_REQUIRED)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -3900,7 +3967,7 @@ def add_parameter_valid_value(
     try:
         with get_cursor() as cursor:
             cursor.execute("""
-                INSERT INTO qsys.parm_valid_values
+                INSERT INTO qsys._prmval
                     (COMMAND_NAME, PARM_NAME, VALID_VALUE, TEXT_DESCRIPTION, ORDINAL_POSITION)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (COMMAND_NAME, PARM_NAME, VALID_VALUE) DO UPDATE SET
