@@ -1,0 +1,38 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies including SSH server
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-server \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# SSH server setup
+RUN mkdir -p /var/run/sshd
+RUN echo 'root:dk400' | chpasswd
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+RUN sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+# Copy source
+COPY src/ /app/src/
+
+# Copy TUI entrypoint
+COPY entrypoint-tui.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Create login script that launches TUI
+RUN echo '#!/bin/bash\nexec python3 /app/src/dk400/tui/main.py' > /usr/local/bin/dk400-tui \
+    && chmod +x /usr/local/bin/dk400-tui
+
+# Add TUI to shells and set as default for root
+RUN echo '/usr/local/bin/dk400-tui' >> /etc/shells
+RUN chsh -s /usr/local/bin/dk400-tui root
+
+EXPOSE 22
+
+CMD ["/usr/sbin/sshd", "-D"]
