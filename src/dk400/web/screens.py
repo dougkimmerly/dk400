@@ -374,6 +374,22 @@ class ScreenManager:
             # Check if we have a focused field that has parameter prompts
             active_field = fields.get('_active_field', '').lower()
 
+            # Special handling for wrkqry screen - query/library prompts
+            if screen == 'wrkqry':
+                if active_field == 'query':
+                    # Show list of queries
+                    library = fields.get('library', '*LIBL').strip().upper()
+                    session.field_values['qrylist_library'] = library
+                    return self.get_screen(session, 'qrylist')
+                elif active_field == 'library':
+                    # Show library list
+                    session.field_values['f4_field_id'] = 'library'
+                    return self.get_screen(session, 'liblist')
+                # Default to query list if no field focused
+                library = fields.get('library', '*LIBL').strip().upper()
+                session.field_values['qrylist_library'] = library
+                return self.get_screen(session, 'qrylist')
+
             # Special handling for qryfiles screen - schema/table prompts
             if screen == 'qryfiles':
                 if active_field == 'schema':
@@ -582,6 +598,14 @@ class ScreenManager:
                 return_screen = session.field_values.get('qry_return_screen', 'wrkqry')
                 return self.get_screen(session, return_screen)
             # Query F4 prompt screens
+            elif screen == 'qrylist':
+                # Return to WRKQRY from query list
+                session.field_values.pop('qrylist_library', None)
+                return self.get_screen(session, 'wrkqry')
+            elif screen == 'liblist':
+                # Return to WRKQRY from library list
+                session.field_values.pop('f4_field_id', None)
+                return self.get_screen(session, 'wrkqry')
             elif screen in ('qryschemas', 'qrytables', 'qrycolumns'):
                 return_screen = session.field_values.get('f4_return_screen', 'qryfiles')
                 session.field_values.pop('qry_prompt_schema', None)
@@ -621,7 +645,8 @@ class ScreenManager:
         'cmdlist': 12,
         'parmlist': 10,
         # Query screens
-        'wrkqry': 10,
+        'qrylist': 12,  # F4 query list prompt
+        'liblist': 12,  # F4 library list prompt
         'qryfields': 15,
         'qrywhere': 8,
         'qrysort': 8,
@@ -5927,19 +5952,28 @@ class ScreenManager:
     # ==========================================================================
 
     def _screen_wrkqry(self, session: Session) -> dict:
-        """Work with Query Definitions screen - list saved queries."""
+        """Work with Queries prompt screen - IBM WRKQRY pattern.
+
+        This is a PROMPT screen (not a list). User enters:
+        - Option: 1=Create, 2=Change, 3=Copy, 4=Delete, 5=Display, 6=Print, 8=Run batch, 9=Run
+        - Query name (F4 for list)
+        - Library (defaults to last used)
+        """
         hostname, date_str, time_str = get_system_info()
 
-        # Get query definitions from user's library list (*LIBL)
-        queries = list_query_definitions(library='*LIBL', username=session.user)
-        offset = session.get_offset('wrkqry')
-        page_size = self.PAGE_SIZES['wrkqry']
+        # Get last used library (session memory)
+        default_lib = session.field_values.get('qry_last_library', '*LIBL')
+
+        # Preserve values if returning from error
+        opt_val = session.field_values.get('wrkqry_option', '')
+        qry_val = session.field_values.get('wrkqry_query', '')
+        lib_val = session.field_values.get('wrkqry_library', default_lib)
 
         content = []
+        fields = []
 
-        # Header
-        content.append(pad_line(f" {hostname:<20}       Work with Queries                       {session.user:>10}"))
-        content.append(pad_line(f"                                                          {date_str}  {time_str}"))
+        # Header - centered title (IBM pattern)
+        content.append(pad_line(f"                          Work with Queries"))
         content.append(pad_line(""))
 
         # Message display
@@ -5948,55 +5982,38 @@ class ScreenManager:
         else:
             content.append(pad_line(""))
 
-        content.append(pad_line(" Type options, press Enter."))
-        content.append(pad_line("   1=Create   2=Change   4=Delete   5=Run"))
+        content.append(pad_line(" Type choices, press Enter."))
         content.append(pad_line(""))
 
-        # Column headers
-        content.append([{"type": "text", "text": pad_line(" Opt  Query      Library    Description"), "class": "field-reverse"}])
-
-        # Query list with blank creation row at top
-        fields = []
-
-        # Blank creation row (AS/400 style - type 1 and name to create)
-        fields.append({"id": "new_opt"})
-        fields.append({"id": "new_name"})
-        fields.append({"id": "new_lib"})
+        # Option field with valid values on right
+        fields.append({"id": "option"})
         content.append([
-            {"type": "text", "text": " "},
-            {"type": "input", "id": "new_opt", "width": 1, "value": "", "class": "field-input"},
-            {"type": "text", "text": "    "},
-            {"type": "input", "id": "new_name", "width": 10, "value": "", "class": "field-input"},
-            {"type": "text", "text": " "},
-            {"type": "input", "id": "new_lib", "width": 10, "value": "QGPL", "class": "field-input"},
+            {"type": "text", "text": "   Option  . . . . . .   "},
+            {"type": "input", "id": "option", "width": 1, "value": opt_val, "class": "field-input"},
+            {"type": "text", "text": "              1=Create, 2=Change, 3=Copy, 4=Delete"},
+        ])
+        content.append(pad_line("                                        5=Display, 6=Print definition"))
+        content.append(pad_line("                                        8=Run in batch, 9=Run"))
+
+        # Query name field
+        fields.append({"id": "query"})
+        content.append([
+            {"type": "text", "text": "   Query . . . . . . .   "},
+            {"type": "input", "id": "query", "width": 10, "value": qry_val, "class": "field-input"},
+            {"type": "text", "text": "         Name, F4 for list"},
         ])
 
-        # Existing queries
-        page_queries = queries[offset:offset + page_size - 1]  # -1 to account for creation row
+        # Library field (indented like IBM)
+        fields.append({"id": "library"})
+        content.append([
+            {"type": "text", "text": "     Library . . . . .     "},
+            {"type": "input", "id": "library", "width": 10, "value": lib_val, "class": "field-input"},
+            {"type": "text", "text": "       Name, *LIBL, F4 for list"},
+        ])
 
-        for i, q in enumerate(page_queries):
-            field_id = f"opt_{i}"
-            fields.append({"id": field_id})
-
-            content.append([
-                {"type": "text", "text": " "},
-                {"type": "input", "id": field_id, "width": 1, "value": "", "class": "field-input"},
-                {"type": "text", "text": f"    {q['name']:<10} {q['library']:<10} {q.get('description', '')[:40]}"},
-            ])
-
-        # Pad empty rows (account for creation row taking one slot)
-        for _ in range(page_size - 1 - len(page_queries)):
+        # Empty space to fill screen
+        for _ in range(10):
             content.append(pad_line(""))
-
-        # More/Bottom indicator
-        total = len(queries)
-        if total == 0:
-            indicator = ""
-        elif offset + page_size - 1 >= total:
-            indicator = "Bottom"
-        else:
-            indicator = "More..."
-        content.append(pad_line(f"                                                              {indicator}"))
 
         # Message line
         msg = session.message if session.message else ""
@@ -6010,7 +6027,12 @@ class ScreenManager:
         ])
         fields.append({"id": "cmd"})
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(pad_line(" F3=Exit   F4=Prompt   F12=Cancel"))
+
+        # Clear temp field values after displaying
+        session.field_values.pop('wrkqry_option', None)
+        session.field_values.pop('wrkqry_query', None)
+        session.field_values.pop('wrkqry_library', None)
 
         return {
             "type": "screen",
@@ -6018,91 +6040,153 @@ class ScreenManager:
             "cols": 80,
             "content": content,
             "fields": fields,
-            "activeField": 0,
+            "activeField": 0,  # Cursor on Option field
         }
 
     def _submit_wrkqry(self, session: Session, fields: dict) -> dict:
-        """Handle Work with Query Definitions submission."""
+        """Handle Work with Queries prompt submission (IBM WRKQRY pattern)."""
         # Check for command line entry
         cmd = fields.get('cmd', '').strip().upper()
         if cmd:
             return self.execute_command(session, cmd)
 
-        # Check for creation via blank row (AS/400 style)
-        new_opt = fields.get('new_opt', '').strip()
-        new_name = fields.get('new_name', '').strip().upper()
-        new_lib = fields.get('new_lib', 'QGPL').strip().upper() or 'QGPL'
+        # Get field values
+        option = fields.get('option', '').strip()
+        query_name = fields.get('query', '').strip().upper()
+        library = fields.get('library', '*LIBL').strip().upper() or '*LIBL'
 
-        if new_opt == '1':
-            if not new_name:
-                session.message = "Query name is required"
+        # Remember library for next time (session default)
+        if library and library != '*LIBL':
+            session.field_values['qry_last_library'] = library
+
+        # If no option entered, just redisplay
+        if not option:
+            return self.get_screen(session, 'wrkqry')
+
+        # Validate option
+        valid_options = ['1', '2', '3', '4', '5', '6', '8', '9']
+        if option not in valid_options:
+            session.message = f"Option {option} not valid"
+            session.message_level = "error"
+            session.field_values['wrkqry_option'] = option
+            session.field_values['wrkqry_query'] = query_name
+            session.field_values['wrkqry_library'] = library
+            return self.get_screen(session, 'wrkqry')
+
+        # Option 1 = Create (query name optional - will prompt if not given)
+        if option == '1':
+            if not query_name:
+                session.message = "Query name is required for create"
                 session.message_level = "error"
+                session.field_values['wrkqry_option'] = option
+                session.field_values['wrkqry_library'] = library
+                return self.get_screen(session, 'wrkqry')
+
+            # Check if query already exists
+            existing = get_query_definition(query_name, library)
+            if existing:
+                session.message = f"Query {query_name} already exists in {library}"
+                session.message_level = "error"
+                session.field_values['wrkqry_option'] = option
+                session.field_values['wrkqry_query'] = query_name
+                session.field_values['wrkqry_library'] = library
                 return self.get_screen(session, 'wrkqry')
 
             # Clear any existing query state and start fresh
             for key in list(session.field_values.keys()):
-                if key.startswith('qry_'):
+                if key.startswith('qry_') and key != 'qry_last_library':
                     del session.field_values[key]
             session.field_values['qry_mode'] = 'create'
-            session.field_values['qry_name'] = new_name
-            session.field_values['qry_library'] = new_lib
+            session.field_values['qry_name'] = query_name
+            session.field_values['qry_library'] = library if library != '*LIBL' else 'QGPL'
             return self.get_screen(session, 'qrydefine')
 
-        # Get current page of queries from user's library list
-        queries = list_query_definitions(library='*LIBL', username=session.user)
-        offset = session.get_offset('wrkqry')
-        page_size = self.PAGE_SIZES['wrkqry']
-        page_queries = queries[offset:offset + page_size - 1]  # -1 for creation row
+        # Options 2-9 require an existing query
+        if not query_name:
+            session.message = "Query name is required"
+            session.message_level = "error"
+            session.field_values['wrkqry_option'] = option
+            session.field_values['wrkqry_library'] = library
+            return self.get_screen(session, 'wrkqry')
 
-        # Process options on existing queries
-        for i, q in enumerate(page_queries):
-            opt = fields.get(f'opt_{i}', '').strip()
-            if not opt:
-                continue
+        # Look up the query
+        qry_def = get_query_definition(query_name, library)
+        if not qry_def:
+            session.message = f"Query {query_name} not found in {library}"
+            session.message_level = "error"
+            session.field_values['wrkqry_option'] = option
+            session.field_values['wrkqry_query'] = query_name
+            session.field_values['wrkqry_library'] = library
+            return self.get_screen(session, 'wrkqry')
 
-            if opt == '2':
-                # Change existing query
-                qry_def = get_query_definition(q['name'], q['library'])
-                if not qry_def:
-                    session.message = f"Query {q['name']} not found"
-                    session.message_level = "error"
-                    return self.get_screen(session, 'wrkqry')
+        # Option 2 = Change
+        if option == '2':
+            # Load query into session for editing
+            session.field_values['qry_mode'] = 'change'
+            session.field_values['qry_name'] = qry_def['name']
+            session.field_values['qry_library'] = qry_def['library']
+            session.field_values['qry_desc'] = qry_def.get('description', '')
+            session.field_values['qry_schema'] = qry_def.get('source_schema', '')
+            session.field_values['qry_table'] = qry_def.get('source_table', '')
+            session.field_values['qry_columns'] = qry_def.get('selected_columns', [])
+            session.field_values['qry_conditions'] = qry_def.get('where_conditions', [])
+            session.field_values['qry_orderby'] = qry_def.get('order_by_fields', [])
+            session.field_values['qry_summary'] = qry_def.get('summary_functions', [])
+            session.field_values['qry_groupby'] = qry_def.get('group_by_fields', [])
+            session.field_values['qry_output'] = qry_def.get('output_type', '*DISPLAY')
+            session.field_values['qry_limit'] = qry_def.get('row_limit', 0)
+            return self.get_screen(session, 'qrydefine')
 
-                # Load query into session
-                session.field_values['qry_mode'] = 'change'
-                session.field_values['qry_name'] = qry_def['name']
-                session.field_values['qry_library'] = qry_def['library']
-                session.field_values['qry_desc'] = qry_def.get('description', '')
-                session.field_values['qry_schema'] = qry_def.get('source_schema', '')
-                session.field_values['qry_table'] = qry_def.get('source_table', '')
-                session.field_values['qry_columns'] = qry_def.get('selected_columns', [])
-                session.field_values['qry_conditions'] = qry_def.get('where_conditions', [])
-                session.field_values['qry_orderby'] = qry_def.get('order_by_fields', [])
-                session.field_values['qry_summary'] = qry_def.get('summary_functions', [])
-                session.field_values['qry_groupby'] = qry_def.get('group_by_fields', [])
-                session.field_values['qry_output'] = qry_def.get('output_type', '*DISPLAY')
-                session.field_values['qry_limit'] = qry_def.get('row_limit', 0)
-                return self.get_screen(session, 'qrydefine')
+        # Option 3 = Copy (not implemented yet)
+        elif option == '3':
+            session.message = "Copy function not yet implemented"
+            session.message_level = "info"
+            return self.get_screen(session, 'wrkqry')
 
-            elif opt == '4':
-                # Delete query
-                success, msg = delete_query_definition(q['name'], q['library'])
-                session.message = msg
-                session.message_level = "info" if success else "error"
-                return self.get_screen(session, 'wrkqry')
+        # Option 4 = Delete
+        elif option == '4':
+            success, msg = delete_query_definition(qry_def['name'], qry_def['library'])
+            session.message = msg
+            session.message_level = "info" if success else "error"
+            return self.get_screen(session, 'wrkqry')
 
-            elif opt == '5':
-                # Run query
-                session.field_values['qry_run_name'] = q['name']
-                session.field_values['qry_run_library'] = q['library']
-                session.field_values['qry_return_screen'] = 'wrkqry'
-                session.set_offset('qryrun', 0)
-                return self.get_screen(session, 'qryrun')
+        # Option 5 = Display (show query definition, read-only)
+        elif option == '5':
+            # Load query for display (read-only view)
+            session.field_values['qry_mode'] = 'display'
+            session.field_values['qry_name'] = qry_def['name']
+            session.field_values['qry_library'] = qry_def['library']
+            session.field_values['qry_desc'] = qry_def.get('description', '')
+            session.field_values['qry_schema'] = qry_def.get('source_schema', '')
+            session.field_values['qry_table'] = qry_def.get('source_table', '')
+            session.field_values['qry_columns'] = qry_def.get('selected_columns', [])
+            session.field_values['qry_conditions'] = qry_def.get('where_conditions', [])
+            session.field_values['qry_orderby'] = qry_def.get('order_by_fields', [])
+            session.field_values['qry_summary'] = qry_def.get('summary_functions', [])
+            session.field_values['qry_groupby'] = qry_def.get('group_by_fields', [])
+            session.field_values['qry_output'] = qry_def.get('output_type', '*DISPLAY')
+            session.field_values['qry_limit'] = qry_def.get('row_limit', 0)
+            return self.get_screen(session, 'qrydefine')
 
-            else:
-                session.message = f"Option {opt} not valid"
-                session.message_level = "error"
-                return self.get_screen(session, 'wrkqry')
+        # Option 6 = Print definition (not implemented yet)
+        elif option == '6':
+            session.message = "Print definition function not yet implemented"
+            session.message_level = "info"
+            return self.get_screen(session, 'wrkqry')
+
+        # Option 8 = Run in batch (not implemented yet)
+        elif option == '8':
+            session.message = "Run in batch function not yet implemented"
+            session.message_level = "info"
+            return self.get_screen(session, 'wrkqry')
+
+        # Option 9 = Run
+        elif option == '9':
+            session.field_values['qry_run_name'] = qry_def['name']
+            session.field_values['qry_run_library'] = qry_def['library']
+            session.field_values['qry_return_screen'] = 'wrkqry'
+            session.set_offset('qryrun', 0)
+            return self.get_screen(session, 'qryrun')
 
         return self.get_screen(session, 'wrkqry')
 
@@ -7270,6 +7354,190 @@ class ScreenManager:
     # ==========================================================================
     # Query F4 Prompt Screens
     # ==========================================================================
+
+    def _screen_qrylist(self, session: Session) -> dict:
+        """Query list for F4 prompt from WRKQRY screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Get library filter (from WRKQRY screen)
+        library = session.field_values.get('qrylist_library', '*LIBL')
+
+        # Get queries from specified library or library list
+        queries = list_query_definitions(library=library, username=session.user)
+
+        page_size = 12
+        offset = session.get_offset('qrylist')
+
+        content = []
+        content.append(pad_line(f"                       Select Query"))
+        content.append(pad_line(""))
+
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type 1 to select query, press Enter."))
+        content.append(pad_line(""))
+
+        content.append([{"type": "text", "text": pad_line(" Opt  Query      Library    Description"), "class": "field-reverse"}])
+
+        fields = []
+        page_queries = queries[offset:offset + page_size]
+
+        for i, q in enumerate(page_queries):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": field_id, "width": 1, "value": "", "class": "field-input"},
+                {"type": "text", "text": f"    {q['name']:<10} {q['library']:<10} {q.get('description', '')[:35]}"},
+            ])
+
+        for _ in range(page_size - len(page_queries)):
+            content.append(pad_line(""))
+
+        total = len(queries)
+        if total == 0:
+            indicator = "(No queries found)"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                         {indicator}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+
+        return {
+            "type": "screen",
+            "screen": "qrylist",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_qrylist(self, session: Session, fields: dict) -> dict:
+        """Handle query selection from F4 prompt."""
+        library = session.field_values.get('qrylist_library', '*LIBL')
+        queries = list_query_definitions(library=library, username=session.user)
+
+        offset = session.get_offset('qrylist')
+        page_size = 12
+        page_queries = queries[offset:offset + page_size]
+
+        for i, q in enumerate(page_queries):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '1':
+                # Set the query name and library in wrkqry fields
+                session.field_values['wrkqry_query'] = q['name']
+                session.field_values['wrkqry_library'] = q['library']
+                # Remember library for next time
+                session.field_values['qry_last_library'] = q['library']
+                # Return to wrkqry
+                return self.get_screen(session, 'wrkqry')
+
+        return self.get_screen(session, 'qrylist')
+
+    def _screen_liblist(self, session: Session) -> dict:
+        """Library list for F4 prompt (uses PostgreSQL schemas)."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Get libraries (schemas)
+        schemas = list_schemas()
+        # Filter to show user libraries, not system
+        user_schemas = [s for s in schemas if s['name'] not in ('pg_catalog', 'pg_toast', 'information_schema')]
+        user_schemas.sort(key=lambda s: s['name'])
+
+        page_size = 12
+        offset = session.get_offset('liblist')
+
+        content = []
+        content.append(pad_line(f"                       Select Library"))
+        content.append(pad_line(""))
+
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(" Type 1 to select library, press Enter."))
+        content.append(pad_line(""))
+
+        content.append([{"type": "text", "text": pad_line(" Opt  Library               Description"), "class": "field-reverse"}])
+
+        fields = []
+        page_libs = user_schemas[offset:offset + page_size]
+
+        for i, lib in enumerate(page_libs):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            # Build description from schema info
+            desc = f"{lib.get('table_count', 0)} tables"
+
+            content.append([
+                {"type": "text", "text": " "},
+                {"type": "input", "id": field_id, "width": 1, "value": "", "class": "field-input"},
+                {"type": "text", "text": f"    {lib['name']:<20} {desc}"},
+            ])
+
+        for _ in range(page_size - len(page_libs)):
+            content.append(pad_line(""))
+
+        total = len(user_schemas)
+        if total == 0:
+            indicator = "(No libraries found)"
+        elif offset + page_size >= total:
+            indicator = "Bottom"
+        else:
+            indicator = "More..."
+        content.append(pad_line(f"                                                         {indicator}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+
+        return {
+            "type": "screen",
+            "screen": "liblist",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_liblist(self, session: Session, fields: dict) -> dict:
+        """Handle library selection from F4 prompt."""
+        schemas = list_schemas()
+        user_schemas = [s for s in schemas if s['name'] not in ('pg_catalog', 'pg_toast', 'information_schema')]
+        user_schemas.sort(key=lambda s: s['name'])
+
+        offset = session.get_offset('liblist')
+        page_size = 12
+        page_libs = user_schemas[offset:offset + page_size]
+
+        field_id = session.field_values.get('f4_field_id', 'library')
+
+        for i, lib in enumerate(page_libs):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '1':
+                # Set the library in the appropriate field
+                if field_id == 'library':
+                    session.field_values['wrkqry_library'] = lib['name'].upper()
+                    session.field_values['qry_last_library'] = lib['name'].upper()
+                # Clean up and return
+                session.field_values.pop('f4_field_id', None)
+                return self.get_screen(session, 'wrkqry')
+
+        return self.get_screen(session, 'liblist')
 
     def _screen_qryschemas(self, session: Session) -> dict:
         """Schema list for F4 prompt."""
