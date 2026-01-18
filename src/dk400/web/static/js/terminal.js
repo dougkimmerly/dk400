@@ -351,8 +351,12 @@ class Terminal5250 {
 
         // Include the currently focused field for F4 parameter prompts
         const activeElement = document.activeElement;
+        console.log('F4 DEBUG: activeElement=', activeElement?.id, 'classList=', activeElement?.classList, 'fieldId=', activeElement?.dataset?.fieldId);
         if (activeElement && activeElement.classList.contains('input-field')) {
             fieldValues['_active_field'] = activeElement.dataset.fieldId || '';
+            console.log('F4 DEBUG: Set _active_field to', fieldValues['_active_field']);
+        } else {
+            console.log('F4 DEBUG: No input-field focused');
         }
 
         this.showBusy();
