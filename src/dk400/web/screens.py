@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 
 from celery import Celery
 
+from src.dk400.web.users import user_manager, UserProfile
+
 
 # Screen dimensions
 COLS_80 = 80
@@ -61,6 +63,7 @@ class Session:
     """User session state."""
     session_id: str
     user: str = "QUSER"
+    user_class: str = "*USER"  # *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER
     current_screen: str = "signon"
     field_values: dict = field(default_factory=dict)
     message: str = ""
@@ -94,6 +97,7 @@ class ScreenManager:
         'WRKBKP': 'wrkbkp',
         'WRKALR': 'wrkalr',
         'WRKNETDEV': 'wrknetdev',
+        'WRKUSRPRF': 'wrkusrprf',
         'SIGNOFF': 'signon',
         'GO': 'main',
         '1': 'wrkactjob',
@@ -153,6 +157,9 @@ class ScreenManager:
                 # F6=Run Now / Start Now on detail screens
                 session.message = "Job started"
                 return self.get_screen(session, screen)
+            elif screen == 'wrkusrprf':
+                # F6=Create on Work with User Profiles
+                return self.get_screen(session, 'user_create')
         elif key == 'F7':
             # Screen-specific F7 handling
             if screen == 'wrkalr':
@@ -177,6 +184,8 @@ class ScreenManager:
                 return self.get_screen(session, 'wrkalr')
             elif screen == 'device_detail':
                 return self.get_screen(session, 'wrknetdev')
+            elif screen in ('user_display', 'user_chgpwd', 'user_create', 'user_change'):
+                return self.get_screen(session, 'wrkusrprf')
             return self.get_screen(session, 'main')
 
         return self.get_screen(session, screen)
@@ -191,6 +200,7 @@ class ScreenManager:
         'wrkbkp': 12,
         'wrkalr': 14,
         'wrknetdev': 12,
+        'wrkusrprf': 10,
     }
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
@@ -222,6 +232,16 @@ class ScreenManager:
         session.message = f"Command {command} not found"
         session.message_level = "error"
         return self.get_screen(session, session.current_screen)
+
+    def _message_line(self, session: Session, width: int = COLS_80) -> list:
+        """Format a message line with appropriate styling."""
+        if not session.message:
+            return pad_line("", width)
+
+        css_class = "field-error" if session.message_level == "error" else "field-warning"
+        # Center the message
+        msg_text = session.message.center(width)
+        return [{"type": "text", "text": msg_text, "class": css_class}]
 
     # ========== SCREEN DEFINITIONS (80 columns) ==========
 
@@ -259,7 +279,8 @@ class ScreenManager:
             ],
             pad_line(""),
             pad_line(""),
-            pad_line(""),
+            # Display error message if present
+            self._message_line(session) if session.message else pad_line(""),
             pad_line(""),
             pad_line(""),
             pad_line(""),
@@ -289,9 +310,26 @@ class ScreenManager:
     def _submit_signon(self, session: Session, fields: dict) -> dict:
         """Handle sign-on submission."""
         user = fields.get('user', '').strip().upper()
+        password = fields.get('password', '')
+
         if not user:
             user = 'QUSER'
+            password = 'QUSER'
+
+        # Authenticate user
+        success, message = user_manager.authenticate(user, password)
+
+        if not success:
+            session.message = message
+            session.message_level = "error"
+            return self.get_screen(session, 'signon')
+
+        # Get user profile for class info
+        user_profile = user_manager.get_user(user)
         session.user = user
+        session.user_class = user_profile.user_class if user_profile else "*USER"
+        session.message = ""  # Clear any previous error message
+
         return self.get_screen(session, 'main')
 
     def _screen_main(self, session: Session) -> dict:
@@ -2272,3 +2310,383 @@ class ScreenManager:
             })
 
         return devices
+
+    # ========== USER MANAGEMENT SCREENS ==========
+
+    def _screen_wrkusrprf(self, session: Session) -> dict:
+        """Work with User Profiles screen."""
+        # Only security officers can access user management
+        if session.user_class not in ('*SECOFR', '*SECADM'):
+            session.message = "Not authorized to user management"
+            session.message_level = "error"
+            return self.get_screen(session, 'main')
+
+        hostname, date_str, time_str = get_system_info()
+
+        users = user_manager.list_users()
+        offset = session.get_offset('wrkusrprf')
+        page_size = 10
+
+        content = []
+
+        # Header
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Work with User Profiles                              {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line("  Type options, press Enter."))
+        content.append(pad_line("    2=Change   3=Copy   4=Delete   5=Display   7=Rename   8=CHGPWD"))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append(pad_line("  Opt  User       Status     Class      Description"))
+
+        # User list
+        fields = []
+        page_users = users[offset:offset + page_size]
+
+        for i, user in enumerate(page_users):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            status = user.status.replace('*', '')[:10]
+            user_class = user.user_class.replace('*', '')[:10]
+            desc = user.description[:30] if user.description else ""
+
+            content.append([
+                {"type": "text", "text": "  "},
+                {"type": "input", "id": field_id, "width": 3, "value": ""},
+                {"type": "text", "text": f"  {user.username:<10} {status:<10} {user_class:<10} {desc}"},
+            ])
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_users)):
+            content.append(pad_line(""))
+
+        # Footer
+        more = "More..." if len(users) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+        content.append(pad_line(""))
+
+        # Command line
+        fields.append({"id": "cmd"})
+        content.append([
+            {"type": "text", "text": " Command"},
+            {"type": "text", "text": pad_line("", 70)},
+        ])
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 60, "value": ""},
+        ])
+
+        # Function keys
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrkusrprf",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_wrkusrprf(self, session: Session, fields: dict) -> dict:
+        """Handle Work with User Profiles submission."""
+        users = user_manager.list_users()
+        offset = session.get_offset('wrkusrprf')
+        page_size = 10
+        page_users = users[offset:offset + page_size]
+
+        for i, user in enumerate(page_users):
+            opt = fields.get(f"opt_{i}", "").strip()
+            if opt:
+                if opt == '2':  # Change
+                    session.field_values['selected_user'] = user.username
+                    return self.get_screen(session, 'user_change')
+                elif opt == '4':  # Delete
+                    if user.username in ('QSECOFR', 'QSYSOPR', 'QUSER'):
+                        session.message = f"Cannot delete system user {user.username}"
+                        session.message_level = "error"
+                    else:
+                        success, msg = user_manager.delete_user(user.username)
+                        session.message = msg
+                        session.message_level = "info" if success else "error"
+                    return self.get_screen(session, 'wrkusrprf')
+                elif opt == '5':  # Display
+                    session.field_values['selected_user'] = user.username
+                    return self.get_screen(session, 'user_display')
+                elif opt == '8':  # Change Password
+                    session.field_values['selected_user'] = user.username
+                    return self.get_screen(session, 'user_chgpwd')
+                else:
+                    session.message = f"Option {opt} not valid"
+                    session.message_level = "error"
+                    return self.get_screen(session, 'wrkusrprf')
+
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        return self.get_screen(session, 'wrkusrprf')
+
+    def _screen_user_display(self, session: Session) -> dict:
+        """Display User Profile details."""
+        hostname, date_str, time_str = get_system_info()
+        username = session.field_values.get('selected_user', 'QUSER')
+        user = user_manager.get_user(username)
+
+        if not user:
+            session.message = f"User {username} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkusrprf')
+
+        content = []
+
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Display User Profile                                 {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line(f"    User profile  . . . . . . . . . :   {user.username}"))
+        content.append(pad_line(f"    Status  . . . . . . . . . . . . :   {user.status}"))
+        content.append(pad_line(f"    User class  . . . . . . . . . . :   {user.user_class}"))
+        content.append(pad_line(f"    Description . . . . . . . . . . :   {user.description}"))
+        content.append(pad_line(""))
+        content.append(pad_line(f"    Created . . . . . . . . . . . . :   {user.created}"))
+        content.append(pad_line(f"    Last sign-on  . . . . . . . . . :   {user.last_signon or 'Never'}"))
+        content.append(pad_line(f"    Sign-on attempts  . . . . . . . :   {user.signon_attempts}"))
+        content.append(pad_line(f"    Password expires  . . . . . . . :   {user.password_expires}"))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "user_display",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
+    def _screen_user_chgpwd(self, session: Session) -> dict:
+        """Change User Password screen."""
+        hostname, date_str, time_str = get_system_info()
+        username = session.field_values.get('selected_user', session.user)
+
+        content = []
+
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Change Password                                      {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line(f"    User profile  . . . . . . . . . :   {username}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    Current password  . . . . . . . :   "},
+            {"type": "input", "id": "current_pwd", "width": 10, "password": True},
+        ])
+        content.append([
+            {"type": "text", "text": "    New password  . . . . . . . . . :   "},
+            {"type": "input", "id": "new_pwd", "width": 10, "password": True},
+        ])
+        content.append([
+            {"type": "text", "text": "    Confirm password  . . . . . . . :   "},
+            {"type": "input", "id": "confirm_pwd", "width": 10, "password": True},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "user_chgpwd",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "current_pwd"},
+                {"id": "new_pwd"},
+                {"id": "confirm_pwd"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_user_chgpwd(self, session: Session, fields: dict) -> dict:
+        """Handle Change Password submission."""
+        username = session.field_values.get('selected_user', session.user)
+        current_pwd = fields.get('current_pwd', '')
+        new_pwd = fields.get('new_pwd', '')
+        confirm_pwd = fields.get('confirm_pwd', '')
+
+        # Security officers can change any password without current
+        is_secofr = session.user_class in ('*SECOFR', '*SECADM')
+        changing_own = username == session.user
+
+        # Verify current password if changing own or not security officer
+        if changing_own or not is_secofr:
+            success, _ = user_manager.authenticate(username, current_pwd)
+            if not success:
+                session.message = "Current password not valid"
+                session.message_level = "error"
+                return self.get_screen(session, 'user_chgpwd')
+
+        # Validate new password
+        if not new_pwd:
+            session.message = "New password required"
+            session.message_level = "error"
+            return self.get_screen(session, 'user_chgpwd')
+
+        if new_pwd != confirm_pwd:
+            session.message = "Passwords do not match"
+            session.message_level = "error"
+            return self.get_screen(session, 'user_chgpwd')
+
+        # Change the password
+        success, msg = user_manager.change_password(username, new_pwd)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkusrprf')
+        return self.get_screen(session, 'user_chgpwd')
+
+    def _screen_user_create(self, session: Session) -> dict:
+        """Create User Profile screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = []
+
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Create User Profile (CRTUSRPRF)                      {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line(""))
+
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    User profile  . . . . . . . . . :   "},
+            {"type": "input", "id": "new_user", "width": 10, "value": ""},
+        ])
+        content.append([
+            {"type": "text", "text": "    Password  . . . . . . . . . . . :   "},
+            {"type": "input", "id": "new_pwd", "width": 10, "password": True},
+        ])
+        content.append([
+            {"type": "text", "text": "    Confirm password  . . . . . . . :   "},
+            {"type": "input", "id": "confirm_pwd", "width": 10, "password": True},
+        ])
+        content.append([
+            {"type": "text", "text": "    User class  . . . . . . . . . . :   "},
+            {"type": "input", "id": "user_class", "width": 10, "value": "*USER"},
+        ])
+        content.append([
+            {"type": "text", "text": "    Description . . . . . . . . . . :   "},
+            {"type": "input", "id": "description", "width": 30, "value": ""},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line("    Valid classes: *SECOFR, *SECADM, *PGMR, *SYSOPR, *USER"))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "user_create",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "new_user"},
+                {"id": "new_pwd"},
+                {"id": "confirm_pwd"},
+                {"id": "user_class"},
+                {"id": "description"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_user_create(self, session: Session, fields: dict) -> dict:
+        """Handle Create User Profile submission."""
+        new_user = fields.get('new_user', '').strip().upper()
+        new_pwd = fields.get('new_pwd', '')
+        confirm_pwd = fields.get('confirm_pwd', '')
+        user_class = fields.get('user_class', '*USER').strip().upper()
+        description = fields.get('description', '').strip()
+
+        # Validate inputs
+        if not new_user:
+            session.message = "User profile name required"
+            session.message_level = "error"
+            return self.get_screen(session, 'user_create')
+
+        if not new_pwd:
+            session.message = "Password required"
+            session.message_level = "error"
+            return self.get_screen(session, 'user_create')
+
+        if new_pwd != confirm_pwd:
+            session.message = "Passwords do not match"
+            session.message_level = "error"
+            return self.get_screen(session, 'user_create')
+
+        valid_classes = ('*SECOFR', '*SECADM', '*PGMR', '*SYSOPR', '*USER')
+        if user_class not in valid_classes:
+            session.message = f"User class must be one of: {', '.join(valid_classes)}"
+            session.message_level = "error"
+            return self.get_screen(session, 'user_create')
+
+        # Create the user
+        success, msg = user_manager.create_user(
+            username=new_user,
+            password=new_pwd,
+            user_class=user_class,
+            description=description
+        )
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkusrprf')
+        return self.get_screen(session, 'user_create')
