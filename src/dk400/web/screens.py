@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 from celery import Celery
 
 from src.dk400.web.users import user_manager, UserProfile
+from src.dk400.web.database import (
+    create_schema, drop_schema, list_schemas, list_schema_tables,
+    grant_object_authority, revoke_object_authority, get_object_authorities,
+    AUTHORITY_GRANTS
+)
 
 
 # Screen dimensions
@@ -98,6 +103,14 @@ class ScreenManager:
         'WRKALR': 'wrkalr',
         'WRKNETDEV': 'wrknetdev',
         'WRKUSRPRF': 'wrkusrprf',
+        # Schema and object authority commands
+        'WRKSCHEMA': 'wrkschema',
+        'WRKLIB': 'wrkschema',  # AS/400 alias
+        'CRTSCHEMA': 'schema_create',
+        'CRTLIB': 'schema_create',  # AS/400 alias
+        'GRTOBJAUT': 'grtobjaut',
+        'RVKOBJAUT': 'rvkobjaut',
+        'DSPOBJAUT': 'dspobjaut',
         'SIGNOFF': 'signon',
         'GO': 'main',
         '1': 'wrkactjob',
@@ -160,6 +173,9 @@ class ScreenManager:
             elif screen == 'wrkusrprf':
                 # F6=Create on Work with User Profiles
                 return self.get_screen(session, 'user_create')
+            elif screen == 'wrkschema':
+                # F6=Create on Work with Schemas
+                return self.get_screen(session, 'schema_create')
         elif key == 'F7':
             # Screen-specific F7 handling
             if screen == 'wrkalr':
@@ -186,6 +202,10 @@ class ScreenManager:
                 return self.get_screen(session, 'wrknetdev')
             elif screen in ('user_display', 'user_chgpwd', 'user_create', 'user_change'):
                 return self.get_screen(session, 'wrkusrprf')
+            elif screen in ('schema_create', 'schema_detail', 'schema_tables'):
+                return self.get_screen(session, 'wrkschema')
+            elif screen in ('grtobjaut', 'rvkobjaut', 'dspobjaut'):
+                return self.get_screen(session, 'wrkschema')
             return self.get_screen(session, 'main')
 
         return self.get_screen(session, screen)
@@ -201,6 +221,8 @@ class ScreenManager:
         'wrkalr': 14,
         'wrknetdev': 12,
         'wrkusrprf': 10,
+        'wrkschema': 10,
+        'dspobjaut': 10,
     }
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
@@ -2690,3 +2712,513 @@ class ScreenManager:
         if success:
             return self.get_screen(session, 'wrkusrprf')
         return self.get_screen(session, 'user_create')
+
+    # ========== SCHEMA AND OBJECT AUTHORITY SCREENS ==========
+
+    def _screen_wrkschema(self, session: Session) -> dict:
+        """Work with Schemas (Libraries) screen."""
+        # Only security officers and admins can manage schemas
+        if session.user_class not in ('*SECOFR', '*SECADM', '*PGMR'):
+            session.message = "Not authorized to schema management"
+            session.message_level = "error"
+            return self.get_screen(session, 'main')
+
+        hostname, date_str, time_str = get_system_info()
+
+        schemas = list_schemas()
+        offset = session.get_offset('wrkschema')
+        page_size = 10
+
+        content = []
+
+        # Header
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Work with Schemas (Libraries)                        {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line("  Type options, press Enter."))
+        content.append(pad_line("    4=Delete   5=Display Tables   8=Grant Authority   9=Display Auth"))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append(pad_line("  Opt  Schema         Owner        Tables  Authority"))
+
+        # Schema list
+        fields = []
+        page_schemas = schemas[offset:offset + page_size]
+
+        for i, schema in enumerate(page_schemas):
+            field_id = f"opt_{i}"
+            fields.append({"id": field_id})
+
+            content.append([
+                {"type": "text", "text": "  "},
+                {"type": "input", "id": field_id, "width": 3, "value": ""},
+                {"type": "text", "text": f"  {schema['name']:<14} {schema['owner']:<12} {schema['table_count']:<7} {schema['authority']}"},
+            ])
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_schemas)):
+            content.append(pad_line(""))
+
+        # Footer
+        more = "More..." if len(schemas) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+        content.append(pad_line(""))
+
+        # Command line
+        fields.append({"id": "cmd"})
+        content.append([
+            {"type": "text", "text": " Command"},
+            {"type": "text", "text": pad_line("", 70)},
+        ])
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 60, "value": ""},
+        ])
+
+        # Function keys
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "wrkschema",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_wrkschema(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Schemas submission."""
+        schemas = list_schemas()
+        offset = session.get_offset('wrkschema')
+        page_size = 10
+        page_schemas = schemas[offset:offset + page_size]
+
+        for i, schema in enumerate(page_schemas):
+            opt = fields.get(f"opt_{i}", "").strip()
+            if opt:
+                if opt == '4':  # Delete
+                    if schema['name'] == 'PUBLIC':
+                        session.message = "Cannot delete PUBLIC schema"
+                        session.message_level = "error"
+                    else:
+                        success, msg = drop_schema(schema['name'])
+                        session.message = msg
+                        session.message_level = "info" if success else "error"
+                    return self.get_screen(session, 'wrkschema')
+                elif opt == '5':  # Display Tables
+                    session.field_values['selected_schema'] = schema['name']
+                    return self.get_screen(session, 'schema_tables')
+                elif opt == '8':  # Grant Authority
+                    session.field_values['selected_schema'] = schema['name']
+                    return self.get_screen(session, 'grtobjaut')
+                elif opt == '9':  # Display Authority
+                    session.field_values['selected_schema'] = schema['name']
+                    return self.get_screen(session, 'dspobjaut')
+                else:
+                    session.message = f"Option {opt} not valid"
+                    session.message_level = "error"
+                    return self.get_screen(session, 'wrkschema')
+
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        return self.get_screen(session, 'wrkschema')
+
+    def _screen_schema_create(self, session: Session) -> dict:
+        """Create Schema screen."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = []
+
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Create Schema (CRTSCHEMA)                            {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+
+        # Input fields
+        fields = [
+            {"id": "schema_name"},
+            {"id": "owner"},
+            {"id": "description"},
+        ]
+
+        content.append([
+            {"type": "text", "text": "    Schema name  . . . . . . . . . :  "},
+            {"type": "input", "id": "schema_name", "width": 20, "value": ""},
+        ])
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    Owner (user profile) . . . . . :  "},
+            {"type": "input", "id": "owner", "width": 10, "value": ""},
+        ])
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    Description  . . . . . . . . . :  "},
+            {"type": "input", "id": "description", "width": 40, "value": ""},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line("    Owner will have *OWNER authority on schema"))
+        content.append(pad_line(""))
+
+        # Pad to fill screen
+        for _ in range(6):
+            content.append(pad_line(""))
+
+        # Function keys
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "schema_create",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_schema_create(self, session: Session, fields: dict) -> dict:
+        """Handle Create Schema submission."""
+        schema_name = fields.get('schema_name', '').strip().upper()
+        owner = fields.get('owner', '').strip().upper()
+        description = fields.get('description', '').strip()
+
+        if not schema_name:
+            session.message = "Schema name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'schema_create')
+
+        # Create the schema
+        success, msg = create_schema(schema_name, owner if owner else None, description)
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkschema')
+        return self.get_screen(session, 'schema_create')
+
+    def _screen_schema_tables(self, session: Session) -> dict:
+        """Display tables in a schema."""
+        hostname, date_str, time_str = get_system_info()
+        schema_name = session.field_values.get('selected_schema', 'PUBLIC')
+
+        tables = list_schema_tables(schema_name)
+
+        content = []
+
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Display Schema Tables                                {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line(f"    Schema  . . . . . . . . :  {schema_name}"))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append(pad_line("    Table Name                      Type           Columns"))
+
+        if tables:
+            for table in tables[:12]:
+                content.append(pad_line(f"      {table['name']:<32} {table['type']:<14} {table['columns']}"))
+        else:
+            content.append(pad_line("      (no tables in this schema)"))
+
+        # Pad to fill screen
+        for _ in range(12 - len(tables)):
+            content.append(pad_line(""))
+
+        # Function keys
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "schema_tables",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": -1,
+        }
+
+    def _screen_grtobjaut(self, session: Session) -> dict:
+        """Grant Object Authority screen."""
+        hostname, date_str, time_str = get_system_info()
+        selected_schema = session.field_values.get('selected_schema', '')
+
+        content = []
+
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Grant Object Authority (GRTOBJAUT)                   {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+
+        # Input fields
+        fields = [
+            {"id": "obj_name"},
+            {"id": "obj_type"},
+            {"id": "username"},
+            {"id": "authority"},
+        ]
+
+        content.append([
+            {"type": "text", "text": "    Object . . . . . . . . . . . . :  "},
+            {"type": "input", "id": "obj_name", "width": 30, "value": selected_schema},
+        ])
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    Object type  . . . . . . . . . :  "},
+            {"type": "input", "id": "obj_type", "width": 10, "value": "*SCHEMA" if selected_schema else ""},
+        ])
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    User . . . . . . . . . . . . . :  "},
+            {"type": "input", "id": "username", "width": 10, "value": ""},
+        ])
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    Authority  . . . . . . . . . . :  "},
+            {"type": "input", "id": "authority", "width": 10, "value": "*USE"},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line("    Object types: *SCHEMA, *TABLE"))
+        content.append(pad_line("    Authorities:  *USE, *CHANGE, *ALL, *OBJMGT, *OWNER, *EXCLUDE"))
+        content.append(pad_line(""))
+
+        # Pad to fill screen
+        for _ in range(4):
+            content.append(pad_line(""))
+
+        # Function keys
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "grtobjaut",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0 if not selected_schema else 2,  # Focus on user if schema pre-filled
+        }
+
+    def _submit_grtobjaut(self, session: Session, fields: dict) -> dict:
+        """Handle Grant Object Authority submission."""
+        obj_name = fields.get('obj_name', '').strip().upper()
+        obj_type = fields.get('obj_type', '').strip().upper()
+        username = fields.get('username', '').strip().upper()
+        authority = fields.get('authority', '').strip().upper()
+
+        # Normalize object type
+        if obj_type.startswith('*'):
+            obj_type = obj_type[1:]  # Remove leading *
+
+        if not obj_name:
+            session.message = "Object name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'grtobjaut')
+
+        if not username:
+            session.message = "User is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'grtobjaut')
+
+        if not authority:
+            session.message = "Authority is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'grtobjaut')
+
+        # Grant the authority
+        success, msg = grant_object_authority(
+            object_type=obj_type,
+            object_name=obj_name,
+            username=username,
+            authority=authority,
+            granted_by=session.user
+        )
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkschema')
+        return self.get_screen(session, 'grtobjaut')
+
+    def _screen_rvkobjaut(self, session: Session) -> dict:
+        """Revoke Object Authority screen."""
+        hostname, date_str, time_str = get_system_info()
+        selected_schema = session.field_values.get('selected_schema', '')
+
+        content = []
+
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Revoke Object Authority (RVKOBJAUT)                  {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+
+        # Input fields
+        fields = [
+            {"id": "obj_name"},
+            {"id": "obj_type"},
+            {"id": "username"},
+        ]
+
+        content.append([
+            {"type": "text", "text": "    Object . . . . . . . . . . . . :  "},
+            {"type": "input", "id": "obj_name", "width": 30, "value": selected_schema},
+        ])
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    Object type  . . . . . . . . . :  "},
+            {"type": "input", "id": "obj_type", "width": 10, "value": "*SCHEMA" if selected_schema else ""},
+        ])
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    User . . . . . . . . . . . . . :  "},
+            {"type": "input", "id": "username", "width": 10, "value": ""},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line("    This will revoke ALL authority from the user on this object."))
+        content.append(pad_line(""))
+
+        # Pad to fill screen
+        for _ in range(6):
+            content.append(pad_line(""))
+
+        # Function keys
+        content.append(pad_line(""))
+        content.append(pad_line(" F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "rvkobjaut",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0 if not selected_schema else 2,
+        }
+
+    def _submit_rvkobjaut(self, session: Session, fields: dict) -> dict:
+        """Handle Revoke Object Authority submission."""
+        obj_name = fields.get('obj_name', '').strip().upper()
+        obj_type = fields.get('obj_type', '').strip().upper()
+        username = fields.get('username', '').strip().upper()
+
+        # Normalize object type
+        if obj_type.startswith('*'):
+            obj_type = obj_type[1:]
+
+        if not obj_name:
+            session.message = "Object name is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'rvkobjaut')
+
+        if not username:
+            session.message = "User is required"
+            session.message_level = "error"
+            return self.get_screen(session, 'rvkobjaut')
+
+        # Revoke the authority
+        success, msg = revoke_object_authority(
+            object_type=obj_type,
+            object_name=obj_name,
+            username=username
+        )
+
+        session.message = msg
+        session.message_level = "info" if success else "error"
+
+        if success:
+            return self.get_screen(session, 'wrkschema')
+        return self.get_screen(session, 'rvkobjaut')
+
+    def _screen_dspobjaut(self, session: Session) -> dict:
+        """Display Object Authorities screen."""
+        hostname, date_str, time_str = get_system_info()
+        selected_schema = session.field_values.get('selected_schema', '')
+
+        # Get authorities, optionally filtered by schema
+        if selected_schema:
+            authorities = get_object_authorities(object_name=selected_schema)
+        else:
+            authorities = get_object_authorities()
+
+        offset = session.get_offset('dspobjaut')
+        page_size = 10
+
+        content = []
+
+        for line in LOGO.split('\n'):
+            content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Display Object Authorities                           {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+
+        if selected_schema:
+            content.append(pad_line(f"    Object  . . . . . . . . :  {selected_schema}"))
+        else:
+            content.append(pad_line("    Showing all object authorities"))
+        content.append(pad_line(""))
+
+        # Column headers
+        content.append(pad_line("    Type     Object              User       Authority  Granted By"))
+
+        # Authority list
+        page_auths = authorities[offset:offset + page_size]
+
+        for auth in page_auths:
+            content.append(pad_line(
+                f"    {auth['object_type']:<8} {auth['object_name']:<18} {auth['username']:<10} "
+                f"{auth['authority']:<10} {auth['granted_by']}"
+            ))
+
+        if not authorities:
+            content.append(pad_line("    (no authorities found)"))
+
+        # Pad empty rows
+        for _ in range(page_size - len(page_auths)):
+            content.append(pad_line(""))
+
+        # Footer
+        more = "More..." if len(authorities) > offset + page_size else "Bottom"
+        content.append(pad_line(f"                                                              {more}"))
+        content.append(pad_line(""))
+
+        # Function keys
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "dspobjaut",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": -1,
+        }

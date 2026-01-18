@@ -514,3 +514,446 @@ def init_role_management() -> bool:
     except Exception as e:
         logger.error(f"Failed to check role management: {e}")
         return False
+
+
+# =============================================================================
+# Schema Management (AS/400-style Library concept)
+# =============================================================================
+
+def create_schema(schema_name: str, owner: str = None, description: str = '') -> tuple[bool, str]:
+    """
+    Create a PostgreSQL schema (AS/400 library equivalent).
+    Optionally assign an owner who can manage objects in the schema.
+    """
+    schema_name = schema_name.lower().strip()
+
+    if not schema_name:
+        return False, "Schema name is required"
+
+    if schema_name in ('public', 'pg_catalog', 'information_schema'):
+        return False, f"Cannot create system schema {schema_name}"
+
+    try:
+        conn = get_connection()
+        conn.autocommit = True
+        cursor = conn.cursor()
+
+        try:
+            # Check if schema exists
+            cursor.execute(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
+                (schema_name,)
+            )
+            if cursor.fetchone():
+                return False, f"Schema {schema_name} already exists"
+
+            # Create the schema
+            cursor.execute(
+                sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema_name))
+            )
+
+            # Set owner if specified
+            if owner:
+                owner_role = owner.lower()
+                cursor.execute(
+                    sql.SQL("ALTER SCHEMA {} OWNER TO {}").format(
+                        sql.Identifier(schema_name),
+                        sql.Identifier(owner_role)
+                    )
+                )
+
+            # Store schema info in object_authorities for tracking
+            cursor.execute("""
+                INSERT INTO object_authorities (object_type, object_name, username, authority, granted_by)
+                VALUES ('SCHEMA', %s, %s, '*OWNER', %s)
+                ON CONFLICT (object_type, object_name, username) DO UPDATE SET authority = '*OWNER'
+            """, (schema_name.upper(), owner.upper() if owner else 'DK400', 'DK400'))
+
+            logger.info(f"Created schema: {schema_name}")
+            return True, f"Schema {schema_name.upper()} created"
+
+        finally:
+            cursor.close()
+            conn.close()
+
+    except Exception as e:
+        logger.error(f"Failed to create schema {schema_name}: {e}")
+        return False, f"Failed to create schema: {e}"
+
+
+def drop_schema(schema_name: str, cascade: bool = False) -> tuple[bool, str]:
+    """Drop a PostgreSQL schema."""
+    schema_name = schema_name.lower().strip()
+
+    if schema_name in ('public', 'pg_catalog', 'information_schema'):
+        return False, f"Cannot drop system schema {schema_name}"
+
+    try:
+        conn = get_connection()
+        conn.autocommit = True
+        cursor = conn.cursor()
+
+        try:
+            # Check if schema exists
+            cursor.execute(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
+                (schema_name,)
+            )
+            if not cursor.fetchone():
+                return False, f"Schema {schema_name} not found"
+
+            # Drop the schema
+            if cascade:
+                cursor.execute(
+                    sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema_name))
+                )
+            else:
+                cursor.execute(
+                    sql.SQL("DROP SCHEMA {}").format(sql.Identifier(schema_name))
+                )
+
+            # Remove from object_authorities
+            cursor.execute(
+                "DELETE FROM object_authorities WHERE object_type = 'SCHEMA' AND object_name = %s",
+                (schema_name.upper(),)
+            )
+
+            logger.info(f"Dropped schema: {schema_name}")
+            return True, f"Schema {schema_name.upper()} dropped"
+
+        finally:
+            cursor.close()
+            conn.close()
+
+    except Exception as e:
+        logger.error(f"Failed to drop schema {schema_name}: {e}")
+        return False, f"Failed to drop schema: {e}"
+
+
+def list_schemas() -> list[dict]:
+    """List all user-created schemas."""
+    schemas = []
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    s.schema_name,
+                    s.schema_owner,
+                    COALESCE(oa.authority, '') as authority,
+                    (SELECT COUNT(*) FROM information_schema.tables t
+                     WHERE t.table_schema = s.schema_name) as table_count
+                FROM information_schema.schemata s
+                LEFT JOIN object_authorities oa
+                    ON oa.object_type = 'SCHEMA'
+                    AND oa.object_name = UPPER(s.schema_name)
+                WHERE s.schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+                ORDER BY s.schema_name
+            """)
+            for row in cursor.fetchall():
+                schemas.append({
+                    'name': row['schema_name'].upper(),
+                    'owner': row['schema_owner'].upper(),
+                    'authority': row['authority'] or '',
+                    'table_count': row['table_count'],
+                })
+    except Exception as e:
+        logger.error(f"Failed to list schemas: {e}")
+    return schemas
+
+
+# =============================================================================
+# Object Authority Management (AS/400-style GRTOBJAUT/RVKOBJAUT)
+# =============================================================================
+
+# Authority types and their PostgreSQL grant mappings
+AUTHORITY_GRANTS = {
+    '*USE': {
+        'SCHEMA': ['USAGE'],
+        'TABLE': ['SELECT'],
+    },
+    '*CHANGE': {
+        'SCHEMA': ['USAGE'],
+        'TABLE': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+    },
+    '*ALL': {
+        'SCHEMA': ['USAGE', 'CREATE'],
+        'TABLE': ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'],
+    },
+    '*OBJMGT': {
+        # Object management - can create/alter/drop objects in schema
+        'SCHEMA': ['USAGE', 'CREATE'],
+        'TABLE': ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+    },
+    '*OWNER': {
+        # Full ownership - transferred via ALTER OWNER
+        'SCHEMA': ['ALL'],
+        'TABLE': ['ALL'],
+    },
+    '*EXCLUDE': {
+        # Revoke all access
+        'SCHEMA': [],
+        'TABLE': [],
+    },
+}
+
+
+def grant_object_authority(
+    object_type: str,
+    object_name: str,
+    username: str,
+    authority: str,
+    granted_by: str = 'DK400'
+) -> tuple[bool, str]:
+    """
+    Grant authority on an object to a user (AS/400 GRTOBJAUT equivalent).
+
+    object_type: 'SCHEMA' or 'TABLE'
+    object_name: Schema name or 'schema.table' for tables
+    username: User to grant authority to
+    authority: *USE, *CHANGE, *ALL, *OBJMGT, *OWNER, *EXCLUDE
+    """
+    object_type = object_type.upper().strip()
+    authority = authority.upper().strip()
+    username = username.upper().strip()
+    role_name = username.lower()
+
+    if authority not in AUTHORITY_GRANTS:
+        return False, f"Invalid authority {authority}. Valid: {', '.join(AUTHORITY_GRANTS.keys())}"
+
+    if object_type not in ('SCHEMA', 'TABLE'):
+        return False, f"Invalid object type {object_type}. Valid: SCHEMA, TABLE"
+
+    # Check if role exists
+    if not role_exists(username):
+        return False, f"User {username} does not exist"
+
+    grants = AUTHORITY_GRANTS[authority].get(object_type, [])
+
+    try:
+        conn = get_connection()
+        conn.autocommit = True
+        cursor = conn.cursor()
+
+        try:
+            if object_type == 'SCHEMA':
+                schema_name = object_name.lower().strip()
+
+                # Verify schema exists
+                cursor.execute(
+                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
+                    (schema_name,)
+                )
+                if not cursor.fetchone():
+                    return False, f"Schema {object_name} not found"
+
+                if authority == '*OWNER':
+                    # Transfer ownership
+                    cursor.execute(
+                        sql.SQL("ALTER SCHEMA {} OWNER TO {}").format(
+                            sql.Identifier(schema_name),
+                            sql.Identifier(role_name)
+                        )
+                    )
+                    # Also grant on existing tables
+                    cursor.execute("""
+                        SELECT table_name FROM information_schema.tables
+                        WHERE table_schema = %s
+                    """, (schema_name,))
+                    for row in cursor.fetchall():
+                        cursor.execute(
+                            sql.SQL("ALTER TABLE {}.{} OWNER TO {}").format(
+                                sql.Identifier(schema_name),
+                                sql.Identifier(row['table_name']),
+                                sql.Identifier(role_name)
+                            )
+                        )
+                elif authority == '*EXCLUDE':
+                    # Revoke all
+                    cursor.execute(
+                        sql.SQL("REVOKE ALL ON SCHEMA {} FROM {}").format(
+                            sql.Identifier(schema_name),
+                            sql.Identifier(role_name)
+                        )
+                    )
+                    # Also revoke on all tables in schema
+                    cursor.execute(
+                        sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA {} FROM {}").format(
+                            sql.Identifier(schema_name),
+                            sql.Identifier(role_name)
+                        )
+                    )
+                else:
+                    # Grant schema privileges
+                    for grant in grants:
+                        cursor.execute(
+                            sql.SQL("GRANT {} ON SCHEMA {} TO {}").format(
+                                sql.SQL(grant),
+                                sql.Identifier(schema_name),
+                                sql.Identifier(role_name)
+                            )
+                        )
+
+                    # For *ALL and *OBJMGT, also grant on existing and future tables
+                    if authority in ('*ALL', '*OBJMGT', '*CHANGE'):
+                        table_grants = AUTHORITY_GRANTS[authority].get('TABLE', [])
+                        if table_grants:
+                            privs = ', '.join(table_grants)
+                            cursor.execute(
+                                sql.SQL("GRANT {} ON ALL TABLES IN SCHEMA {} TO {}").format(
+                                    sql.SQL(privs),
+                                    sql.Identifier(schema_name),
+                                    sql.Identifier(role_name)
+                                )
+                            )
+                            # Default privileges for future tables
+                            cursor.execute(
+                                sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA {} GRANT {} ON TABLES TO {}").format(
+                                    sql.Identifier(schema_name),
+                                    sql.SQL(privs),
+                                    sql.Identifier(role_name)
+                                )
+                            )
+
+            elif object_type == 'TABLE':
+                # Parse schema.table format
+                if '.' in object_name:
+                    schema_name, table_name = object_name.lower().split('.', 1)
+                else:
+                    schema_name = 'public'
+                    table_name = object_name.lower()
+
+                # Verify table exists
+                cursor.execute("""
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = %s AND table_name = %s
+                """, (schema_name, table_name))
+                if not cursor.fetchone():
+                    return False, f"Table {object_name} not found"
+
+                if authority == '*OWNER':
+                    cursor.execute(
+                        sql.SQL("ALTER TABLE {}.{} OWNER TO {}").format(
+                            sql.Identifier(schema_name),
+                            sql.Identifier(table_name),
+                            sql.Identifier(role_name)
+                        )
+                    )
+                elif authority == '*EXCLUDE':
+                    cursor.execute(
+                        sql.SQL("REVOKE ALL ON {}.{} FROM {}").format(
+                            sql.Identifier(schema_name),
+                            sql.Identifier(table_name),
+                            sql.Identifier(role_name)
+                        )
+                    )
+                else:
+                    for grant in grants:
+                        cursor.execute(
+                            sql.SQL("GRANT {} ON {}.{} TO {}").format(
+                                sql.SQL(grant),
+                                sql.Identifier(schema_name),
+                                sql.Identifier(table_name),
+                                sql.Identifier(role_name)
+                            )
+                        )
+
+            # Record in object_authorities table
+            if authority == '*EXCLUDE':
+                cursor.execute("""
+                    DELETE FROM object_authorities
+                    WHERE object_type = %s AND object_name = %s AND username = %s
+                """, (object_type, object_name.upper(), username))
+            else:
+                cursor.execute("""
+                    INSERT INTO object_authorities (object_type, object_name, username, authority, granted_by)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (object_type, object_name, username)
+                    DO UPDATE SET authority = %s, granted_by = %s, granted_at = CURRENT_TIMESTAMP
+                """, (object_type, object_name.upper(), username, authority, granted_by, authority, granted_by))
+
+            logger.info(f"Granted {authority} on {object_type} {object_name} to {username}")
+            return True, f"Authority {authority} granted to {username} on {object_name}"
+
+        finally:
+            cursor.close()
+            conn.close()
+
+    except Exception as e:
+        logger.error(f"Failed to grant authority: {e}")
+        return False, f"Failed to grant authority: {e}"
+
+
+def revoke_object_authority(
+    object_type: str,
+    object_name: str,
+    username: str
+) -> tuple[bool, str]:
+    """
+    Revoke all authority on an object from a user (AS/400 RVKOBJAUT equivalent).
+    """
+    return grant_object_authority(object_type, object_name, username, '*EXCLUDE')
+
+
+def get_object_authorities(object_type: str = None, object_name: str = None, username: str = None) -> list[dict]:
+    """
+    Get object authorities, optionally filtered.
+    """
+    authorities = []
+    try:
+        with get_cursor() as cursor:
+            query = "SELECT * FROM object_authorities WHERE 1=1"
+            params = []
+
+            if object_type:
+                query += " AND object_type = %s"
+                params.append(object_type.upper())
+            if object_name:
+                query += " AND object_name = %s"
+                params.append(object_name.upper())
+            if username:
+                query += " AND username = %s"
+                params.append(username.upper())
+
+            query += " ORDER BY object_type, object_name, username"
+
+            cursor.execute(query, params)
+            for row in cursor.fetchall():
+                authorities.append({
+                    'object_type': row['object_type'],
+                    'object_name': row['object_name'],
+                    'username': row['username'],
+                    'authority': row['authority'],
+                    'granted_by': row['granted_by'],
+                    'granted_at': str(row['granted_at']) if row['granted_at'] else '',
+                })
+    except Exception as e:
+        logger.error(f"Failed to get object authorities: {e}")
+    return authorities
+
+
+def list_schema_tables(schema_name: str) -> list[dict]:
+    """List all tables in a schema."""
+    tables = []
+    schema_name = schema_name.lower().strip()
+
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    t.table_name,
+                    t.table_type,
+                    (SELECT COUNT(*) FROM information_schema.columns c
+                     WHERE c.table_schema = t.table_schema AND c.table_name = t.table_name) as column_count
+                FROM information_schema.tables t
+                WHERE t.table_schema = %s
+                ORDER BY t.table_name
+            """, (schema_name,))
+            for row in cursor.fetchall():
+                tables.append({
+                    'name': row['table_name'].upper(),
+                    'type': row['table_type'],
+                    'columns': row['column_count'],
+                })
+    except Exception as e:
+        logger.error(f"Failed to list tables in {schema_name}: {e}")
+    return tables
