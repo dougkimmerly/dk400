@@ -26,7 +26,7 @@ COPY entrypoint-tui.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Create login script that launches TUI
-RUN echo '#!/bin/bash\nexec python3 /app/src/dk400/tui/main.py' > /usr/local/bin/dk400-tui \
+RUN echo '#!/bin/bash\ncd /app\nexport PYTHONPATH=/app\nexec python3 /app/src/dk400/tui/main.py' > /usr/local/bin/dk400-tui \
     && chmod +x /usr/local/bin/dk400-tui
 
 # Add TUI to shells and set as default for root
