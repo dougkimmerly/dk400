@@ -206,6 +206,58 @@ class ScreenManager:
         '90': 'signon',
     }
 
+    # Command descriptions for F4 prompt
+    COMMAND_DESCRIPTIONS = {
+        'WRKACTJOB': 'Work with Active Jobs',
+        'WRKJOBQ': 'Work with Job Queues',
+        'WRKSVC': 'Work with Services (Docker)',
+        'DSPSYSSTS': 'Display System Status',
+        'DSPLOG': 'Display System Log',
+        'SBMJOB': 'Submit Job',
+        'WRKHLTH': 'Work with Health Checks',
+        'WRKBKP': 'Work with Backups',
+        'WRKALR': 'Work with Alerts',
+        'WRKNETDEV': 'Work with Network Devices',
+        'WRKUSRPRF': 'Work with User Profiles',
+        'CRTUSRPRF': 'Create User Profile',
+        'DSPUSRAUT': 'Display User Authorities',
+        'WRKSCHEMA': 'Work with Schemas (Libraries)',
+        'WRKLIB': 'Work with Libraries',
+        'CRTSCHEMA': 'Create Schema (Library)',
+        'CRTLIB': 'Create Library',
+        'GRTOBJAUT': 'Grant Object Authority',
+        'RVKOBJAUT': 'Revoke Object Authority',
+        'DSPOBJAUT': 'Display Object Authority',
+        'WRKSYSVAL': 'Work with System Values',
+        'DSPSYSVAL': 'Display System Values',
+        'CHGSYSVAL': 'Change System Value',
+        'WRKMSGQ': 'Work with Message Queues',
+        'DSPMSG': 'Display Messages',
+        'SNDMSG': 'Send Message',
+        'CRTMSGQ': 'Create Message Queue',
+        'WRKDTAARA': 'Work with Data Areas',
+        'DSPDTAARA': 'Display Data Area',
+        'CRTDTAARA': 'Create Data Area',
+        'CHGDTAARA': 'Change Data Area',
+        'WRKJOBD': 'Work with Job Descriptions',
+        'DSPJOBD': 'Display Job Description',
+        'CRTJOBD': 'Create Job Description',
+        'WRKOUTQ': 'Work with Output Queues',
+        'CRTOUTQ': 'Create Output Queue',
+        'WRKSPLF': 'Work with Spooled Files',
+        'DSPSPLF': 'Display Spooled File',
+        'WRKJOBSCDE': 'Work with Job Schedule Entries',
+        'ADDJOBSCDE': 'Add Job Schedule Entry',
+        'WRKAUTL': 'Work with Authorization Lists',
+        'DSPAUTL': 'Display Authorization List',
+        'CRTAUTL': 'Create Authorization List',
+        'WRKSBSD': 'Work with Subsystem Descriptions',
+        'STRSBS': 'Start Subsystem',
+        'ENDSBS': 'End Subsystem',
+        'SIGNOFF': 'Sign Off',
+        'GO': 'Go to Main Menu',
+    }
+
     def get_screen(self, session: Session, screen_name: str) -> dict:
         """Get screen data for rendering."""
         session.current_screen = screen_name
@@ -236,6 +288,14 @@ class ScreenManager:
                 return self.get_screen(session, 'signon')
             else:
                 return self.get_screen(session, 'main')
+        elif key == 'F4':
+            # F4 = Prompt - show command list or parameter help
+            # Store current screen to return to after command selection
+            session.field_values['f4_return_screen'] = screen
+            # Get command from current input field if any
+            cmd_input = fields.get('cmd', '').strip().upper()
+            session.field_values['f4_filter'] = cmd_input
+            return self.get_screen(session, 'cmdlist')
         elif key == 'F5':
             return self.get_screen(session, screen)
         elif key == 'F6':
@@ -340,6 +400,12 @@ class ScreenManager:
             # Subsystem screens
             elif screen in ('dspsbsd', 'crtsbsd', 'strsbs', 'endsbs'):
                 return self.get_screen(session, 'wrksbsd')
+            # Command list (F4 prompt)
+            elif screen == 'cmdlist':
+                return_screen = session.field_values.get('f4_return_screen', 'main')
+                session.field_values.pop('f4_filter', None)
+                session.field_values.pop('f4_return_screen', None)
+                return self.get_screen(session, return_screen)
             return self.get_screen(session, 'main')
 
         return self.get_screen(session, screen)
@@ -357,6 +423,7 @@ class ScreenManager:
         'wrkusrprf': 10,
         'wrkschema': 10,
         'dspobjaut': 10,
+        'cmdlist': 12,
     }
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
@@ -544,6 +611,132 @@ class ScreenManager:
             "fields": [{"id": "cmd"}],
             "activeField": 0,
         }
+
+    def _screen_cmdlist(self, session: Session) -> dict:
+        """Command List (F4 Prompt) - show all available commands."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Get filter from F4 context
+        cmd_filter = session.field_values.get('f4_filter', '').upper()
+
+        # Build list of commands (exclude numeric shortcuts)
+        commands = []
+        for cmd, screen in self.COMMANDS.items():
+            if cmd.isdigit():
+                continue
+            desc = self.COMMAND_DESCRIPTIONS.get(cmd, '')
+            # Apply filter if present
+            if cmd_filter and not cmd.startswith(cmd_filter):
+                continue
+            commands.append((cmd, desc))
+
+        # Sort by command name
+        commands.sort(key=lambda x: x[0])
+
+        # Pagination
+        page_size = 12
+        offset = session.get_offset('cmdlist')
+        total = len(commands)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('cmdlist', offset)
+
+        page_commands = commands[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            if offset + page_size >= total:
+                pos_indicator = "Bottom"
+            elif offset == 0:
+                pos_indicator = "More..."
+            else:
+                pos_indicator = "More..."
+        else:
+            pos_indicator = "Bottom"
+
+        content = [
+            pad_line(f" {hostname:<20}       Select Command                           {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type option, press Enter to select command."),
+            pad_line("   1=Select"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Command       Description"), "class": "field-reverse"}],
+        ]
+
+        fields = []
+        for i, (cmd, desc) in enumerate(page_commands):
+            row = [
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": f"  {cmd:<12}  {desc[:50]}"},
+            ]
+            content.append(row)
+            fields.append({"id": f"opt_{i}"})
+
+        # Pad to consistent height
+        while len(content) < 19:
+            content.append(pad_line(""))
+
+        content.append(pad_line(f"                                                           {pos_indicator:>10}"))
+
+        # Message area
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        # Filter input
+        content.append([
+            {"type": "text", "text": " Position to . . . :  "},
+            {"type": "input", "id": "filter", "width": 10, "value": cmd_filter, "class": "field-input"},
+        ])
+        fields.append({"id": "filter"})
+
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "cmdlist",
+            "cols": 80,
+            "content": content,
+            "fields": fields,
+            "activeField": 0,
+        }
+
+    def _submit_cmdlist(self, session: Session, fields: dict) -> dict:
+        """Handle command list submission."""
+        # Check for filter change
+        new_filter = fields.get('filter', '').strip().upper()
+        old_filter = session.field_values.get('f4_filter', '')
+
+        if new_filter != old_filter:
+            session.field_values['f4_filter'] = new_filter
+            session.set_offset('cmdlist', 0)
+            return self.get_screen(session, 'cmdlist')
+
+        # Get current page of commands
+        cmd_filter = session.field_values.get('f4_filter', '').upper()
+        commands = []
+        for cmd, screen in self.COMMANDS.items():
+            if cmd.isdigit():
+                continue
+            if cmd_filter and not cmd.startswith(cmd_filter):
+                continue
+            commands.append((cmd, self.COMMANDS[cmd]))
+        commands.sort(key=lambda x: x[0])
+
+        page_size = 12
+        offset = session.get_offset('cmdlist')
+        page_commands = commands[offset:offset + page_size]
+
+        # Check for option selection
+        for i, (cmd, screen) in enumerate(page_commands):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '1':
+                # Execute the selected command
+                return self.execute_command(session, cmd)
+
+        return self.get_screen(session, 'cmdlist')
 
     def _screen_wrkactjob(self, session: Session) -> dict:
         """Work with Active Jobs - 80 columns."""
