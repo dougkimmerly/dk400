@@ -806,7 +806,7 @@ def get_library_objects(library: str, obj_type: str = '*ALL') -> list[dict]:
                         FROM information_schema.tables
                         WHERE table_schema = %s
                           AND table_type = 'BASE TABLE'
-                          AND table_name NOT LIKE '\\_%'
+                          AND table_name NOT LIKE '\\_%%'
                         ORDER BY table_name
                     """, (lib_safe,))
                     objects.extend([{**dict(r), 'library': lib} for r in cursor.fetchall()])
