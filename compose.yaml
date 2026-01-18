@@ -11,6 +11,7 @@ services:
       POSTGRES_PASSWORD: dk400secret
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dk400 -d dk400"]
       interval: 10s

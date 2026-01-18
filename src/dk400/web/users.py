@@ -11,7 +11,10 @@ from datetime import datetime
 from typing import Optional
 from dataclasses import dataclass
 
-from src.dk400.web.database import get_cursor, init_database, check_connection
+from src.dk400.web.database import (
+    get_cursor, init_database, check_connection,
+    create_role, drop_role, update_role_password, set_role_enabled
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +153,12 @@ class UserManager:
                     description,
                     datetime.now(),
                 ))
+
+            # Create corresponding PostgreSQL role
+            role_success, role_msg = create_role(username, password.upper(), user_class)
+            if not role_success:
+                logger.warning(f"User {username} created but role creation failed: {role_msg}")
+
             return True, f"User {username} created"
         except Exception as e:
             logger.error(f"Failed to create user {username}: {e}")
@@ -173,6 +182,12 @@ class UserManager:
                     "DELETE FROM users WHERE username = %s",
                     (username,)
                 )
+
+            # Drop corresponding PostgreSQL role
+            role_success, role_msg = drop_role(username)
+            if not role_success:
+                logger.warning(f"User {username} deleted but role removal failed: {role_msg}")
+
             return True, f"User {username} deleted"
         except Exception as e:
             logger.error(f"Failed to delete user {username}: {e}")
@@ -200,6 +215,12 @@ class UserManager:
                     SET password_hash = %s, salt = %s
                     WHERE username = %s
                 """, (password_hash, salt, username))
+
+            # Update PostgreSQL role password
+            role_success, role_msg = update_role_password(username, new_password.upper())
+            if not role_success:
+                logger.warning(f"Password changed for {username} but role update failed: {role_msg}")
+
             return True, f"Password changed for {username}"
         except Exception as e:
             logger.error(f"Failed to change password for {username}: {e}")
@@ -300,6 +321,12 @@ class UserManager:
                 cursor.execute("""
                     UPDATE users SET status = '*ENABLED' WHERE username = %s
                 """, (username,))
+
+            # Enable PostgreSQL role login
+            role_success, role_msg = set_role_enabled(username, True)
+            if not role_success:
+                logger.warning(f"User {username} enabled but role update failed: {role_msg}")
+
             return True, f"User {username} enabled"
         except Exception as e:
             logger.error(f"Failed to enable user {username}: {e}")
@@ -322,6 +349,12 @@ class UserManager:
                 cursor.execute("""
                     UPDATE users SET status = '*DISABLED' WHERE username = %s
                 """, (username,))
+
+            # Disable PostgreSQL role login
+            role_success, role_msg = set_role_enabled(username, False)
+            if not role_success:
+                logger.warning(f"User {username} disabled but role update failed: {role_msg}")
+
             return True, f"User {username} disabled"
         except Exception as e:
             logger.error(f"Failed to disable user {username}: {e}")
