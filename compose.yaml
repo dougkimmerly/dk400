@@ -34,7 +34,7 @@ services:
   celery-beat:
     build: .
     container_name: celery-beat
-    command: celery -A src.dk400.celery_app beat --loglevel=info
+    command: celery -A src.dk400.celery_app beat --loglevel=info -s /app/data/celerybeat-schedule
     restart: unless-stopped
     depends_on:
       redis:
@@ -43,6 +43,7 @@ services:
       CELERY_BROKER_URL: redis://redis:6379/0
     volumes:
       - ./src:/app/src:ro
+      - ./data/celery:/app/data
     networks:
       - dk400
 
