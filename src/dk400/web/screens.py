@@ -9162,7 +9162,7 @@ class ScreenManager:
             pad_line(f" Receiver: {entry['receiver_name']:<10}  Library: {entry['receiver_library']:<10}"),
             pad_line(f" Object: {entry.get('object_name', ''):<12}  Schema: {entry.get('object_schema', ''):<10}  Time: {time_str_entry}"),
             pad_line(""),
-            pad_line(f" User: {entry.get('job_user', ''):<12}   Job: {entry.get('job_name', ''):<15}   Program: {entry.get('program_name', '')}"),
+            pad_line(f" User: {(entry.get('job_user') or ''):<12}   Job: {(entry.get('job_name') or ''):<15}   Program: {entry.get('program_name') or ''}"),
             pad_line(""),
         ]
 
