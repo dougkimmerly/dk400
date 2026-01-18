@@ -1009,7 +1009,7 @@ class ScreenManager:
         ])
         fields.append({"id": "filter"})
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -1116,7 +1116,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -1219,7 +1219,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up"))
 
         return {
             "type": "screen",
@@ -1302,7 +1302,7 @@ class ScreenManager:
             pad_line(""),
             pad_line(""),
             pad_line(""),
-            pad_line(" F3=Exit  F5=Refresh  F12=Cancel"),
+            fkey_line("F3=Exit  F5=Refresh  F12=Cancel"),
             pad_line(""),
         ]
 
@@ -1347,7 +1347,7 @@ class ScreenManager:
             pad_line(f" QSPL         ACTIVE       1   SBS     QSYS"),
             pad_line(f" QCTL         ACTIVE       1   SBS     QSYS"),
             pad_line(""),
-            pad_line(" F3=Exit   F5=Refresh   F12=Cancel"),
+            fkey_line("F3=Exit   F5=Refresh   F12=Cancel"),
             pad_line(""),
         ]
 
@@ -1415,7 +1415,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up"))
 
         return {
             "type": "screen",
@@ -1484,7 +1484,7 @@ class ScreenManager:
             pad_line(""),
             pad_line(""),
             pad_line(""),
-            pad_line(" F3=Exit  F5=Refresh  F12=Cancel"),
+            fkey_line("F3=Exit  F5=Refresh  F12=Cancel"),
             pad_line(""),
         ]
 
@@ -1552,7 +1552,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 120},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
 
         return {
             "type": "screen",
@@ -1631,7 +1631,7 @@ class ScreenManager:
             content.append(pad_line("", 132))
 
         content.append(pad_line("", 132))
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel", 132))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel", 132))
         content.append(pad_line("", 132))
 
         return {
@@ -1689,7 +1689,7 @@ class ScreenManager:
             pad_line("", 132),
             pad_line("", 132),
             pad_line("", 132),
-            pad_line(" F3=Exit  F5=Refresh  F12=Cancel", 132),
+            fkey_line("F3=Exit  F5=Refresh  F12=Cancel", 132),
             pad_line("", 132),
         ]
 
@@ -1746,7 +1746,7 @@ class ScreenManager:
 
         content.append(pad_line(f"                                                                                                    {pos_indicator:>12}", 132))
         content.append(pad_line("", 132))
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
 
         return {
             "type": "screen",
@@ -1902,7 +1902,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Run All  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Run All  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -1976,7 +1976,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Start All  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Start All  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -2052,7 +2052,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 120},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F7=Ack All  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F7=Ack All  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
 
         return {
             "type": "screen",
@@ -2126,7 +2126,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 120},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
 
         return {
             "type": "screen",
@@ -2194,7 +2194,7 @@ class ScreenManager:
             pad_line(""),
             pad_line(""),
             pad_line(""),
-            pad_line(" F3=Exit  F5=Refresh  F6=Run Now  F12=Cancel"),
+            fkey_line("F3=Exit  F5=Refresh  F6=Run Now  F12=Cancel"),
             pad_line(""),
         ]
 
@@ -2234,7 +2234,7 @@ class ScreenManager:
             pad_line(""),
             pad_line(""),
             pad_line(""),
-            pad_line(" F3=Exit  F5=Refresh  F12=Cancel"),
+            fkey_line("F3=Exit  F5=Refresh  F12=Cancel"),
             pad_line(""),
         ]
 
@@ -2308,7 +2308,7 @@ class ScreenManager:
             pad_line(""),
             pad_line(""),
             pad_line(""),
-            pad_line(" F3=Exit  F5=Refresh  F6=Start Now  F12=Cancel"),
+            fkey_line("F3=Exit  F5=Refresh  F6=Start Now  F12=Cancel"),
             pad_line(""),
         ]
 
@@ -2379,7 +2379,7 @@ class ScreenManager:
             pad_line("", 132),
             pad_line("", 132),
             pad_line("", 132),
-            pad_line(" F3=Exit  F5=Refresh  F7=Acknowledge  F12=Cancel", 132),
+            fkey_line("F3=Exit  F5=Refresh  F7=Acknowledge  F12=Cancel", 132),
             pad_line("", 132),
         ]
 
@@ -2464,7 +2464,7 @@ class ScreenManager:
             pad_line("", 132),
             pad_line("", 132),
             pad_line("", 132),
-            pad_line(" F3=Exit  F5=Refresh  F2=Ping  F7=Wake-on-LAN  F12=Cancel", 132),
+            fkey_line("F3=Exit  F5=Refresh  F2=Ping  F7=Wake-on-LAN  F12=Cancel", 132),
             pad_line("", 132),
         ]
 
@@ -3142,7 +3142,7 @@ class ScreenManager:
             content.append(pad_line(""))
 
         # Function keys - IBM standard
-        content.append(pad_line("  F3=Exit   F5=Refresh   F6=Create   F12=Cancel"))
+        content.append(fkey_line("F3=Exit   F5=Refresh   F6=Create   F12=Cancel"))
 
         return {
             "type": "screen",
@@ -3418,7 +3418,7 @@ class ScreenManager:
         more = "More..." if len(authorities) > offset + page_size else "Bottom"
         content.append(pad_line(f"                                                              {more}"))
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel  PgUp/PgDn=Scroll"))
+        content.append(fkey_line("F3=Exit  F12=Cancel  PgUp/PgDn=Scroll"))
 
         return {
             "type": "screen",
@@ -3476,7 +3476,7 @@ class ScreenManager:
         content.append(pad_line(""))
         content.append(pad_line(""))
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -3593,7 +3593,7 @@ class ScreenManager:
         content.append(pad_line(""))
         content.append(pad_line(""))
         content.append(pad_line(""))
-        content.append(pad_line("  F3=Exit   F4=Prompt   F12=Cancel"))
+        content.append(fkey_line("F3=Exit   F4=Prompt   F12=Cancel"))
 
         return {
             "type": "screen",
@@ -3718,7 +3718,7 @@ class ScreenManager:
         content.append(pad_line(""))
         content.append(pad_line("    Use option 8=Change Password from WRKUSRPRF to change password."))
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -3850,7 +3850,7 @@ class ScreenManager:
 
         # Function keys
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -3949,7 +3949,7 @@ class ScreenManager:
 
         # Function keys
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4017,7 +4017,7 @@ class ScreenManager:
 
         # Function keys
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4085,7 +4085,7 @@ class ScreenManager:
 
         # Function keys
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4188,7 +4188,7 @@ class ScreenManager:
 
         # Function keys
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4290,7 +4290,7 @@ class ScreenManager:
         content.append(pad_line(""))
 
         # Function keys
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4359,7 +4359,7 @@ class ScreenManager:
             content.append(pad_line(""))
 
         # Function keys - IBM standard
-        content.append(pad_line("  F3=Exit   F5=Refresh   F12=Cancel"))
+        content.append(fkey_line("F3=Exit   F5=Refresh   F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4433,7 +4433,7 @@ class ScreenManager:
         content.append(pad_line(""))
         content.append(pad_line(""))
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4506,7 +4506,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4589,7 +4589,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Send message  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Send message  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4652,7 +4652,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4725,7 +4725,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4799,7 +4799,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4854,7 +4854,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -4937,7 +4937,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5007,7 +5007,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5082,7 +5082,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5145,7 +5145,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5237,7 +5237,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5317,7 +5317,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5395,7 +5395,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5450,7 +5450,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Add  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Add  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5526,7 +5526,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5590,7 +5590,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5687,7 +5687,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5752,7 +5752,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5795,7 +5795,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5869,7 +5869,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Add entry  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Add entry  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -5937,7 +5937,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -6012,7 +6012,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -6051,7 +6051,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -6111,7 +6111,7 @@ class ScreenManager:
             {"type": "text", "text": " ===> "},
             {"type": "input", "id": "cmd", "width": 66},
         ])
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -6223,7 +6223,7 @@ class ScreenManager:
         ])
         fields.append({"id": "cmd"})
 
-        content.append(pad_line(" F3=Exit   F4=Prompt   F12=Cancel"))
+        content.append(fkey_line("F3=Exit   F4=Prompt   F12=Cancel"))
 
         # Clear temp field values after displaying
         session.field_values.pop('wrkqry_option', None)
@@ -6514,7 +6514,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66, "class": "field-input"},
         ])
 
-        content.append(pad_line(" F3=Exit  F5=Run  F10=Save  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Run  F10=Save  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -6752,7 +6752,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66, "class": "field-input"},
         ])
 
-        content.append(pad_line(" F3=Exit  F4=Prompt  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F4=Prompt  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -6880,7 +6880,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F5=Run  F12=Cancel    (blank = all columns)"))
+        content.append(fkey_line("F3=Exit  F5=Run  F12=Cancel    (blank = all columns)"))
 
         return {
             "type": "screen",
@@ -7025,7 +7025,7 @@ class ScreenManager:
         ])
         fields.append({"id": "cmd"})
 
-        content.append(pad_line(" F3=Exit  F5=Run  F6=Add  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Run  F6=Add  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -7175,7 +7175,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66, "class": "field-input"},
         ])
 
-        content.append(pad_line(" F3=Exit  F4=Prompt  F5=Run  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F4=Prompt  F5=Run  F12=Cancel"))
 
         field_list = [
             {"id": "field"},
@@ -7348,7 +7348,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F5=Run  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Run  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -7532,7 +7532,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  PageUp/PageDown=Scroll"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel  PageUp/PageDown=Scroll"))
 
         return {
             "type": "screen",
@@ -7607,7 +7607,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+        content.append(fkey_line("F12=Cancel  PageUp/PageDown=Scroll"))
 
         return {
             "type": "screen",
@@ -7699,7 +7699,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+        content.append(fkey_line("F12=Cancel  PageUp/PageDown=Scroll"))
 
         return {
             "type": "screen",
@@ -7786,7 +7786,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+        content.append(fkey_line("F12=Cancel  PageUp/PageDown=Scroll"))
 
         return {
             "type": "screen",
@@ -7874,7 +7874,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+        content.append(fkey_line("F12=Cancel  PageUp/PageDown=Scroll"))
 
         return {
             "type": "screen",
@@ -7963,7 +7963,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F12=Cancel  PageUp/PageDown=Scroll"))
+        content.append(fkey_line("F12=Cancel  PageUp/PageDown=Scroll"))
 
         return {
             "type": "screen",
@@ -8041,7 +8041,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F12=Cancel"))
+        content.append(fkey_line("F12=Cancel"))
 
         return {
             "type": "screen",
@@ -8101,7 +8101,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F12=Cancel"))
+        content.append(fkey_line("F12=Cancel"))
 
         return {
             "type": "screen",
@@ -8216,7 +8216,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F12=Cancel    (blank = no summary)"))
+        content.append(fkey_line("F3=Exit  F12=Cancel    (blank = no summary)"))
 
         return {
             "type": "screen",
@@ -8359,7 +8359,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F12=Cancel    (blank = use column name)"))
+        content.append(fkey_line("F3=Exit  F12=Cancel    (blank = use column name)"))
 
         return {
             "type": "screen",
@@ -8463,7 +8463,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -8569,7 +8569,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -8666,7 +8666,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -8719,7 +8719,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F12=Cancel"))
+        content.append(fkey_line("F12=Cancel"))
 
         return {
             "type": "screen",
@@ -8776,7 +8776,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -8858,7 +8858,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -9025,7 +9025,7 @@ class ScreenManager:
         session.message = ""
 
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel  PgUp/PgDn=Page"))
+        content.append(fkey_line("F3=Exit  F12=Cancel  PgUp/PgDn=Page"))
 
         return {
             "type": "screen",
@@ -9090,7 +9090,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -9209,7 +9209,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel  F17=Subset"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel  F17=Subset"))
 
         return {
             "type": "screen",
@@ -9250,7 +9250,7 @@ class ScreenManager:
         session.message = ""
 
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F4=Prompt  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F4=Prompt  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -9362,7 +9362,7 @@ class ScreenManager:
         content.append(pad_line(f" {msg}"))
         session.message = ""
 
-        content.append(pad_line(" F3=Exit  F12=Cancel  F10=View Before/After Image"))
+        content.append(fkey_line("F3=Exit  F12=Cancel  F10=View Before/After Image"))
 
         return {
             "type": "screen",
@@ -9420,7 +9420,7 @@ class ScreenManager:
         session.message = ""
 
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -9498,7 +9498,7 @@ class ScreenManager:
         session.message = ""
 
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -9590,7 +9590,7 @@ class ScreenManager:
             {"type": "input", "id": "cmd", "width": 66},
         ])
         fields.append({"id": "cmd"})
-        content.append(pad_line(" F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F5=Refresh  F6=Create  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -9701,7 +9701,7 @@ class ScreenManager:
         session.message = ""
 
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
@@ -9770,7 +9770,7 @@ class ScreenManager:
         session.message = ""
 
         content.append(pad_line(""))
-        content.append(pad_line(" F3=Exit  F12=Cancel"))
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
 
         return {
             "type": "screen",
