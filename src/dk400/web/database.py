@@ -569,6 +569,35 @@ def create_schema(schema_name: str, owner: str = None, description: str = '') ->
                 ON CONFLICT (object_type, object_name, username) DO UPDATE SET authority = '*OWNER'
             """, (schema_name.upper(), owner.upper() if owner else 'DK400', 'DK400'))
 
+            # Grant *SECOFR users (security officers) full access to new schemas
+            cursor.execute("""
+                SELECT username FROM users WHERE user_class = '*SECOFR'
+            """)
+            secofr_users = cursor.fetchall()
+            for row in secofr_users:
+                secofr_role = row['username'].lower()
+                # Check if role exists before granting
+                cursor.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (secofr_role,))
+                if cursor.fetchone():
+                    cursor.execute(
+                        sql.SQL("GRANT ALL ON SCHEMA {} TO {}").format(
+                            sql.Identifier(schema_name),
+                            sql.Identifier(secofr_role)
+                        )
+                    )
+                    cursor.execute(
+                        sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA {} GRANT ALL ON TABLES TO {}").format(
+                            sql.Identifier(schema_name),
+                            sql.Identifier(secofr_role)
+                        )
+                    )
+                    cursor.execute(
+                        sql.SQL("ALTER DEFAULT PRIVILEGES IN SCHEMA {} GRANT ALL ON SEQUENCES TO {}").format(
+                            sql.Identifier(schema_name),
+                            sql.Identifier(secofr_role)
+                        )
+                    )
+
             logger.info(f"Created schema: {schema_name}")
             return True, f"Schema {schema_name.upper()} created"
 
