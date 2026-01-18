@@ -499,14 +499,14 @@ def _rename_tables_to_as400_style():
     """
     renames = [
         # (old_name, new_name)
-        ('qsys._jobhst', 'qsys._jobhst'),
-        ('qsys.qhst', 'qsys.qhst'),
-        ('qsys._objaut', 'qsys._objaut'),
-        ('qsys._lib', 'qsys._lib'),
-        ('qsys._splf', 'qsys._splf'),
-        ('qsys._cmd', 'qsys._cmd'),
-        ('qsys._cmdparm', 'qsys._cmdparm'),
-        ('qsys._prmval', 'qsys._prmval'),
+        ('qsys.job_history', 'qsys._jobhst'),
+        ('qsys.audit_log', 'qsys.qhst'),
+        ('qsys.object_authorities', 'qsys._objaut'),
+        ('qsys.libraries', 'qsys._lib'),
+        ('qsys.spooled_files', 'qsys._splf'),
+        ('qsys.command_info', 'qsys._cmd'),
+        ('qsys.command_parm_info', 'qsys._cmdparm'),
+        ('qsys.parm_valid_values', 'qsys._prmval'),
     ]
 
     try:
