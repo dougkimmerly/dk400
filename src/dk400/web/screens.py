@@ -340,30 +340,30 @@ class ScreenManager:
         stats = self._get_system_stats()
 
         content = [
-            pad_line(f" {hostname:<20}     Display System Status                  {date_str}  {time_str}"),
+            pad_line(f"                      Display System Status                         {hostname}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
             pad_line(""),
-            pad_line(f" % CPU utilization  . . . . . . . . :     {stats['cpu_pct']:5.1f}"),
-            pad_line(f" Elapsed time . . . . . . . . . . . :  {stats['elapsed_time']}"),
-            pad_line(f" Jobs in system . . . . . . . . . . :      {stats['jobs_in_system']:4d}"),
-            pad_line(f" % permanent addresses  . . . . . . :     {stats['perm_addr_pct']:5.1f}"),
-            pad_line(f" % temporary addresses  . . . . . . :     {stats['temp_addr_pct']:5.1f}"),
+            pad_line(f" % CPU utilization  . . . . . . . . . :       {stats['cpu_pct']:5.1f}"),
+            pad_line(f" Elapsed time . . . . . . . . . . . . :   {stats['elapsed_time']}"),
+            pad_line(f" Jobs in system . . . . . . . . . . . :        {stats['jobs_in_system']:4d}"),
+            pad_line(f"   % perm addresses used  . . . . . . :       {stats['perm_addr_pct']:5.1f}"),
+            pad_line(f"   % temp addresses used  . . . . . . :       {stats['temp_addr_pct']:5.1f}"),
             pad_line(""),
-            pad_line(f" System ASP . . . . . . . . . . . . :     {stats['asp_util']:5.1f} %"),
-            pad_line(f"   % system ASP used  . . . . . . . :     {stats['disk_pct']:5.1f}"),
+            pad_line(f" Total auxiliary storage (GB) . . . . :   {stats['disk_total_gb']:8.1f}"),
+            pad_line(f"   Auxiliary storage used (GB)  . . . :   {stats['disk_used_gb']:8.1f}"),
+            pad_line(f"   Auxiliary storage available (GB) . :   {stats['disk_avail_gb']:8.1f}"),
+            pad_line(f"   % auxiliary storage used . . . . . :       {stats['disk_pct']:5.1f}"),
             pad_line(""),
-            [{"type": "text", "text": pad_line("   Pool    Reserved   Max   Allocated   Defined   Pool Name"), "class": "field-highlight"}],
-            pad_line(f"   *MACHINE     {stats['machine_pool']:5d}    ++      {stats['machine_act']:4d}      {stats['machine_pool']:5d}   Machine pool"),
-            pad_line(f"   *BASE        {stats['base_pool']:5d}    ++      {stats['base_act']:4d}      {stats['base_pool']:5d}   Base pool"),
-            pad_line(f"   *INTERACT     {stats['interact_pool']:4d}    ++      {stats['interact_act']:4d}       {stats['interact_pool']:4d}   Interactive"),
-            pad_line(f"   *SPOOL         {stats['spool_pool']:3d}    ++        {stats['spool_act']:2d}        {stats['spool_pool']:3d}   Spooling"),
+            pad_line(f" Current processing capacity  . . . . :       {stats['cpu_count']:5.2f}"),
+            pad_line(f" Processing capacity used . . . . . . :       {stats['cpu_used']:5.2f}"),
+            pad_line(f" Total main storage (MB)  . . . . . . :   {stats['mem_total_mb']:8.1f}"),
+            pad_line(f"   Main storage used (MB) . . . . . . :   {stats['mem_used_mb']:8.1f}"),
+            pad_line(f"   Main storage available (MB)  . . . :   {stats['mem_avail_mb']:8.1f}"),
+            pad_line(f"   % main storage used  . . . . . . . :       {stats['mem_pct']:5.1f}"),
             pad_line(""),
-            [{"type": "text", "text": pad_line(" Subsystem      Status      Active   Max   Pool Name"), "class": "field-highlight"}],
-            pad_line(f" QBATCH         ACTIVE        {stats['celery_active']:4d}    ++   *BASE"),
-            pad_line(f" QINTER         ACTIVE        {stats['docker_containers']:4d}    ++   *INTERACT"),
-            pad_line(f" QSPL           ACTIVE           1    ++   *SPOOL"),
-            pad_line(f" QCTL           ACTIVE           1    ++   *MACHINE"),
-            pad_line(""),
-            pad_line("                            Press Enter to continue."),
+            pad_line(f" System ASP . . . . . . . . . . . . . :   {stats['asp_util']:8.1f} %"),
+            pad_line(f" Total # of disk units  . . . . . . . :          {stats['disk_units']:2d}"),
+            pad_line("                                                              More..."),
         ]
 
         return {
@@ -678,12 +678,22 @@ class ScreenManager:
         """Get system statistics."""
         stats = {
             'cpu_pct': 0.0,
+            'cpu_count': 1.0,
+            'cpu_used': 0.0,
             'elapsed_time': '00:00:00',
             'jobs_in_system': 1,
             'perm_addr_pct': 0.0,
             'temp_addr_pct': 0.0,
             'asp_util': 0.0,
             'disk_pct': 0.0,
+            'disk_total_gb': 0.0,
+            'disk_used_gb': 0.0,
+            'disk_avail_gb': 0.0,
+            'disk_units': 1,
+            'mem_total_mb': 0.0,
+            'mem_used_mb': 0.0,
+            'mem_avail_mb': 0.0,
+            'mem_pct': 0.0,
             'machine_pool': 1024,
             'machine_act': 100,
             'base_pool': 2048,
@@ -697,13 +707,29 @@ class ScreenManager:
             'docker_containers': 0,
         }
 
+        # Get uptime for elapsed time
+        try:
+            with open('/proc/uptime', 'r') as f:
+                uptime_seconds = float(f.read().split()[0])
+                hours = int(uptime_seconds // 3600)
+                minutes = int((uptime_seconds % 3600) // 60)
+                seconds = int(uptime_seconds % 60)
+                stats['elapsed_time'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+        except Exception:
+            pass
+
+        # CPU info
         try:
             with open('/proc/loadavg', 'r') as f:
                 load = float(f.read().split()[0])
                 stats['cpu_pct'] = min(load * 25, 100)
+            cpu_count = os.cpu_count() or 1
+            stats['cpu_count'] = float(cpu_count)
+            stats['cpu_used'] = min(load, float(cpu_count))
         except Exception:
             pass
 
+        # Memory info
         try:
             with open('/proc/meminfo', 'r') as f:
                 meminfo = {}
@@ -714,28 +740,52 @@ class ScreenManager:
                         val = int(parts[1].strip().split()[0])
                         meminfo[key] = val
 
-                total = meminfo.get('MemTotal', 1)
-                free = meminfo.get('MemAvailable', meminfo.get('MemFree', 0))
-                used_pct = ((total - free) / total) * 100
+                total_kb = meminfo.get('MemTotal', 1)
+                avail_kb = meminfo.get('MemAvailable', meminfo.get('MemFree', 0))
+                used_kb = total_kb - avail_kb
 
-                stats['machine_pool'] = total // 1024
-                stats['base_pool'] = (total // 1024) // 2
-                stats['perm_addr_pct'] = used_pct
+                stats['mem_total_mb'] = total_kb / 1024
+                stats['mem_used_mb'] = used_kb / 1024
+                stats['mem_avail_mb'] = avail_kb / 1024
+                stats['mem_pct'] = (used_kb / total_kb) * 100 if total_kb > 0 else 0
+                stats['perm_addr_pct'] = stats['mem_pct'] * 0.6  # Estimate
+                stats['temp_addr_pct'] = stats['mem_pct'] * 0.4  # Estimate
+
+                stats['machine_pool'] = total_kb // 1024
+                stats['base_pool'] = (total_kb // 1024) // 2
         except Exception:
             pass
 
+        # Disk info
         try:
-            result = subprocess.run(['df', '/'], capture_output=True, text=True)
+            result = subprocess.run(['df', '-B1', '/'], capture_output=True, text=True)
             if result.returncode == 0:
                 lines = result.stdout.strip().split('\n')
                 if len(lines) > 1:
                     parts = lines[1].split()
                     if len(parts) >= 5:
-                        stats['disk_pct'] = float(parts[4].replace('%', ''))
+                        total_bytes = int(parts[1])
+                        used_bytes = int(parts[2])
+                        avail_bytes = int(parts[3])
+
+                        stats['disk_total_gb'] = total_bytes / (1024 ** 3)
+                        stats['disk_used_gb'] = used_bytes / (1024 ** 3)
+                        stats['disk_avail_gb'] = avail_bytes / (1024 ** 3)
+                        stats['disk_pct'] = (used_bytes / total_bytes) * 100 if total_bytes > 0 else 0
                         stats['asp_util'] = stats['disk_pct']
         except Exception:
             pass
 
+        # Count disk units (block devices)
+        try:
+            result = subprocess.run(['lsblk', '-d', '-n', '-o', 'NAME'], capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                disks = [d for d in result.stdout.strip().split('\n') if d and not d.startswith('loop')]
+                stats['disk_units'] = len(disks) if disks else 1
+        except Exception:
+            pass
+
+        # Celery jobs
         try:
             app = get_celery_app()
             inspect = app.control.inspect()
@@ -747,6 +797,7 @@ class ScreenManager:
         except Exception:
             pass
 
+        # Docker containers
         try:
             result = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True, timeout=5)
             if result.returncode == 0 and result.stdout.strip():
