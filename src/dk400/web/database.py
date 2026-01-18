@@ -718,8 +718,8 @@ def _create_default_system_objects():
             """)
             cursor.execute("""
                 INSERT INTO qsys._dtaara (name, type, length, value, text, created_by)
-                VALUES ('QTIME', '*CHAR', 6, TO_CHAR(CURRENT_TIME, 'HH24MISS'), 'System time', 'SYSTEM')
-                ON CONFLICT (name) DO UPDATE SET value = TO_CHAR(CURRENT_TIME, 'HH24MISS')
+                VALUES ('QTIME', '*CHAR', 6, TO_CHAR(CURRENT_TIME::TIME, 'HH24MISS'), 'System time', 'SYSTEM')
+                ON CONFLICT (name) DO UPDATE SET value = TO_CHAR(CURRENT_TIME::TIME, 'HH24MISS')
             """)
 
         logger.info("Default system objects created")
@@ -780,10 +780,12 @@ def _migrate_objects_to_libraries():
                 ON CONFLICT (name) DO NOTHING
             """)
 
-            # Migrate message queues
+            # Migrate message queues (old table has 'queue_type', new has 'delivery')
             cursor.execute("""
-                INSERT INTO qgpl._msgq (name, text, delivery, severity, created_by, created)
-                SELECT name, description, delivery, 0, 'SYSTEM', CURRENT_TIMESTAMP
+                INSERT INTO qgpl._msgq (name, text, delivery, created_by, created)
+                SELECT name, description,
+                    CASE queue_type WHEN '*BREAK' THEN '*BREAK' ELSE '*HOLD' END,
+                    COALESCE(created_by, 'SYSTEM'), COALESCE(created_at, CURRENT_TIMESTAMP)
                 FROM message_queues
                 ON CONFLICT (name) DO NOTHING
             """)
