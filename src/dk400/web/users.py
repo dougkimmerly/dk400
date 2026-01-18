@@ -69,8 +69,9 @@ class UserManager:
                 return
 
             init_database()
-            self._ensure_default_users()
+            # Set initialized BEFORE creating default users to prevent recursion
             self._initialized = True
+            self._ensure_default_users()
         except Exception as e:
             logger.error(f"Database initialization failed: {e}")
 
