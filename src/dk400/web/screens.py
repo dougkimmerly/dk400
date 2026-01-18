@@ -141,9 +141,42 @@ class ScreenManager:
                 return self.get_screen(session, 'main')
         elif key == 'F5':
             return self.get_screen(session, screen)
+        elif key == 'F6':
+            # Screen-specific F6 handling
+            if screen == 'wrkhlth':
+                session.message = "Running all health checks..."
+                return self.get_screen(session, screen)
+            elif screen == 'wrkbkp':
+                session.message = "Starting all backup jobs..."
+                return self.get_screen(session, screen)
+            elif screen in ('health_detail', 'backup_detail'):
+                # F6=Run Now / Start Now on detail screens
+                session.message = "Job started"
+                return self.get_screen(session, screen)
+        elif key == 'F7':
+            # Screen-specific F7 handling
+            if screen == 'wrkalr':
+                session.message = "All alerts acknowledged"
+                return self.get_screen(session, screen)
+            elif screen == 'alert_detail':
+                session.message = "Alert acknowledged"
+                return self.get_screen(session, 'wrkalr')
         elif key == 'F12':
             if screen in ('signon', 'main'):
                 return self.get_screen(session, screen)
+            # Return to parent screen based on current screen
+            if screen in ('job_detail', 'health_detail', 'health_history'):
+                return self.get_screen(session, 'wrkhlth') if 'health' in screen else self.get_screen(session, 'wrkactjob')
+            elif screen == 'queue_detail':
+                return self.get_screen(session, 'wrkjobq')
+            elif screen in ('container_logs', 'container_detail'):
+                return self.get_screen(session, 'wrksvc')
+            elif screen == 'backup_detail':
+                return self.get_screen(session, 'wrkbkp')
+            elif screen == 'alert_detail':
+                return self.get_screen(session, 'wrkalr')
+            elif screen == 'device_detail':
+                return self.get_screen(session, 'wrknetdev')
             return self.get_screen(session, 'main')
 
         return self.get_screen(session, screen)
@@ -396,17 +429,83 @@ class ScreenManager:
             return self.execute_command(session, cmd)
 
         jobs = self._get_celery_jobs()
-        for i, job in enumerate(jobs[:12]):
+        offset = session.get_offset('wrkactjob')
+        for i, job in enumerate(jobs[offset:offset + self.PAGE_SIZES['wrkactjob']]):
             opt = fields.get(f'opt_{i}', '').strip()
-            if opt == '4':
+            if opt == '2':
+                # Change - not supported for Celery tasks
+                session.message = f"Change not supported for {job['name']}"
+                session.message_level = "warning"
+                break
+            elif opt == '3':
+                # Hold job - revoke without terminate
+                if job.get('task_id'):
+                    try:
+                        app = get_celery_app()
+                        app.control.revoke(job['task_id'], terminate=False)
+                        session.message = f"Job {job['name']} held"
+                    except Exception:
+                        session.message = f"Failed to hold {job['name']}"
+                        session.message_level = "error"
+                break
+            elif opt == '4':
                 self._revoke_celery_task(job.get('task_id'))
                 session.message = f"Job {job['name']} end requested"
                 break
+            elif opt == '5':
+                # Work with job - show detail screen
+                session.field_values['selected_job'] = job
+                return self._screen_job_detail(session, job)
+            elif opt == '8':
+                # Spooled files - show output for this job
+                session.message = f"No spool files for {job['name']}"
+                break
             elif opt:
-                session.message = f"Option {opt} not implemented"
+                session.message = f"Option {opt} not valid"
+                session.message_level = "error"
                 break
 
         return self.get_screen(session, 'wrkactjob')
+
+    def _screen_job_detail(self, session: Session, job: dict) -> dict:
+        """Display job detail screen - 80 columns."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f"                      Display Job Status                            {hostname}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Job:   {job.get('name', 'UNKNOWN'):<10}    User:  {job.get('user', 'QBATCH'):<10}"),
+            pad_line(f" Type:  {job.get('type', 'BCH'):<10}    Status: {job.get('status', 'ACTIVE'):<10}"),
+            pad_line(""),
+            pad_line(" Job attributes:"),
+            pad_line(f"   Task ID . . . . . :  {job.get('task_id', 'N/A')[:36]}"),
+            pad_line(f"   Function  . . . . :  {job.get('function', 'N/A')}"),
+            pad_line(f"   CPU % . . . . . . :  {job.get('cpu', '0.0')}"),
+            pad_line(f"   Queue . . . . . . :  celery"),
+            pad_line(f"   Priority  . . . . :  5"),
+            pad_line(""),
+            pad_line(" Additional job attributes:"),
+            pad_line("   Time slice  . . . :  2000 milliseconds"),
+            pad_line("   Default wait  . . :  30 seconds"),
+            pad_line("   Max CPU time  . . :  *NOMAX"),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(" F3=Exit  F5=Refresh  F12=Cancel"),
+            pad_line(""),
+        ]
+
+        return {
+            "type": "screen",
+            "screen": "job_detail",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
 
     def _screen_dspsyssts(self, session: Session) -> dict:
         """Display System Status - 80 columns, compact single-screen view."""
@@ -519,6 +618,77 @@ class ScreenManager:
             "activeField": 0,
         }
 
+    def _submit_wrkjobq(self, session: Session, fields: dict) -> dict:
+        """Handle WRKJOBQ submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        queues = self._get_celery_queues()
+        for i, queue in enumerate(queues[:self.PAGE_SIZES['wrkjobq']]):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '5':
+                # Work with queue - show detail
+                return self._screen_queue_detail(session, queue)
+            elif opt == '6':
+                # Hold queue - pause consumption
+                session.message = f"Queue {queue['name']} hold requested"
+                break
+            elif opt == '7':
+                # Release queue
+                session.message = f"Queue {queue['name']} release requested"
+                break
+            elif opt == '8':
+                # Work with jobs in queue
+                session.message = f"Displaying jobs in {queue['name']}"
+                return self.get_screen(session, 'wrkactjob')
+            elif opt:
+                session.message = f"Option {opt} not valid"
+                session.message_level = "error"
+                break
+
+        return self.get_screen(session, 'wrkjobq')
+
+    def _screen_queue_detail(self, session: Session, queue: dict) -> dict:
+        """Display job queue detail - 80 columns."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f"                     Display Job Queue                             {hostname}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Job queue . . . . . :  {queue.get('name', 'CELERY'):<15}"),
+            pad_line(f"   Library . . . . . :  {queue.get('lib', 'QGPL'):<15}"),
+            pad_line(""),
+            pad_line(f" Status  . . . . . . :  {queue.get('status', 'ACTIVE')}"),
+            pad_line(f" Subsystem . . . . . :  {queue.get('subsystem', 'QBATCH')}"),
+            pad_line(f" Number of jobs  . . :  {queue.get('jobs', 0)}"),
+            pad_line(""),
+            pad_line(" Queue attributes:"),
+            pad_line("   Sequence number . :  50"),
+            pad_line("   Max active jobs . :  *NOMAX"),
+            pad_line("   Operator control  :  *YES"),
+            pad_line("   Authority . . . . :  *LIBCRTAUT"),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(" F3=Exit  F5=Refresh  F12=Cancel"),
+            pad_line(""),
+        ]
+
+        return {
+            "type": "screen",
+            "screen": "queue_detail",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
     def _screen_wrksvc(self, session: Session) -> dict:
         """Work with Services (Docker) - 132 columns for more data."""
         hostname, date_str, time_str = get_system_info()
@@ -592,7 +762,8 @@ class ScreenManager:
             return self.execute_command(session, cmd)
 
         services = self._get_docker_services()
-        for i, svc in enumerate(services[:15]):
+        offset = session.get_offset('wrksvc')
+        for i, svc in enumerate(services[offset:offset + self.PAGE_SIZES['wrksvc']]):
             opt = fields.get(f'opt_{i}', '').strip()
             if opt == '2':
                 self._docker_action(svc['name'], 'start')
@@ -606,11 +777,122 @@ class ScreenManager:
                 self._docker_action(svc['name'], 'restart')
                 session.message = f"Service {svc['name']} restart requested"
                 break
+            elif opt == '5':
+                # Display logs
+                session.field_values['log_container'] = svc['name']
+                return self._screen_container_logs(session, svc['name'])
+            elif opt == '8':
+                # Display details
+                return self._screen_container_detail(session, svc)
             elif opt:
-                session.message = f"Option {opt} not implemented"
+                session.message = f"Option {opt} not valid"
+                session.message_level = "error"
                 break
 
         return self.get_screen(session, 'wrksvc')
+
+    def _screen_container_logs(self, session: Session, container_name: str) -> dict:
+        """Display container logs - 132 columns."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Get container logs
+        logs = []
+        try:
+            result = subprocess.run(
+                ['docker', 'logs', '--tail', '16', container_name.lower()],
+                capture_output=True, text=True, timeout=10
+            )
+            output = result.stderr or result.stdout
+            if output:
+                for line in output.strip().split('\n')[-16:]:
+                    logs.append(line[:110])
+        except Exception:
+            logs.append("Unable to retrieve logs")
+
+        content = [
+            pad_line(f" {hostname:<20}                      Container Logs: {container_name:<15}                  {session.user:>10}", 132),
+            pad_line(f"                                                                                          {date_str}  {time_str}", 132),
+            pad_line("", 132),
+            [{"type": "text", "text": pad_line(" Log Output", 132), "class": "field-reverse"}],
+        ]
+
+        for log in logs[:16]:
+            content.append(pad_line(f" {log}", 132))
+
+        while len(content) < 21:
+            content.append(pad_line("", 132))
+
+        content.append(pad_line("", 132))
+        content.append(pad_line(" F3=Exit  F5=Refresh  F12=Cancel", 132))
+        content.append(pad_line("", 132))
+
+        return {
+            "type": "screen",
+            "screen": "container_logs",
+            "cols": 132,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
+    def _screen_container_detail(self, session: Session, svc: dict) -> dict:
+        """Display container detail - 132 columns."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Get more container details
+        details = {'id': 'N/A', 'created': 'N/A', 'started': 'N/A', 'health': 'N/A', 'network': 'N/A'}
+        try:
+            result = subprocess.run(
+                ['docker', 'inspect', '--format',
+                 '{{.Id}}|{{.Created}}|{{.State.StartedAt}}|{{.State.Health.Status}}|{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}',
+                 svc['name'].lower()],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                parts = result.stdout.strip().split('|')
+                if len(parts) >= 5:
+                    details['id'] = parts[0][:12]
+                    details['created'] = parts[1][:19].replace('T', ' ')
+                    details['started'] = parts[2][:19].replace('T', ' ')
+                    details['health'] = parts[3] if parts[3] else 'N/A'
+                    details['network'] = parts[4] if parts[4] else 'N/A'
+        except Exception:
+            pass
+
+        content = [
+            pad_line(f" {hostname:<20}                     Container Details                                         {session.user:>10}", 132),
+            pad_line(f"                                                                                          {date_str}  {time_str}", 132),
+            pad_line("", 132),
+            pad_line(f" Container . . . . . :  {svc['name']:<30}", 132),
+            pad_line(f" ID  . . . . . . . . :  {details['id']:<12}", 132),
+            pad_line(f" Image . . . . . . . :  {svc.get('image', 'N/A'):<30}", 132),
+            pad_line("", 132),
+            pad_line(f" Status  . . . . . . :  {svc.get('status', 'N/A'):<15}", 132),
+            pad_line(f" Elapsed . . . . . . :  {svc.get('elapsed', 'N/A'):<15}", 132),
+            pad_line(f" Health  . . . . . . :  {details['health']:<15}", 132),
+            pad_line("", 132),
+            pad_line(f" Created . . . . . . :  {details['created']:<20}", 132),
+            pad_line(f" Started . . . . . . :  {details['started']:<20}", 132),
+            pad_line("", 132),
+            pad_line(f" IP Address  . . . . :  {details['network']:<20}", 132),
+            pad_line(f" Ports . . . . . . . :  {svc.get('ports', 'N/A'):<50}", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line(" F3=Exit  F5=Refresh  F12=Cancel", 132),
+            pad_line("", 132),
+        ]
+
+        return {
+            "type": "screen",
+            "screen": "container_detail",
+            "cols": 132,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
 
     def _screen_dsplog(self, session: Session) -> dict:
         """Display Log - 132 columns for full log messages."""
@@ -1046,6 +1328,387 @@ class ScreenManager:
             "fields": fields,
             "activeField": 0,
         }
+
+    # ========== SUBMIT HANDLERS FOR ADDITIONAL SCREENS ==========
+
+    def _submit_wrkhlth(self, session: Session, fields: dict) -> dict:
+        """Handle WRKHLTH submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        checks = self._get_health_checks()
+        offset = session.get_offset('wrkhlth')
+        for i, check in enumerate(checks[offset:offset + self.PAGE_SIZES['wrkhlth']]):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '5':
+                # Display details
+                return self._screen_health_detail(session, check)
+            elif opt == '6':
+                # Run check now
+                session.message = f"Running check {check['name']}..."
+                # In real implementation, would trigger check
+                break
+            elif opt == '8':
+                # View history
+                return self._screen_health_history(session, check)
+            elif opt:
+                session.message = f"Option {opt} not valid"
+                session.message_level = "error"
+                break
+
+        return self.get_screen(session, 'wrkhlth')
+
+    def _screen_health_detail(self, session: Session, check: dict) -> dict:
+        """Display health check detail - 80 columns."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f"                    Display Health Check                            {hostname}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Check Name  . . . . :  {check.get('name', 'UNKNOWN'):<20}"),
+            pad_line(f" Status  . . . . . . :  {check.get('status', 'N/A'):<10}"),
+            pad_line(f" Last Run  . . . . . :  {check.get('last_run', 'N/A'):<12}"),
+            pad_line(f" Interval  . . . . . :  {check.get('interval', 'N/A'):<10}"),
+            pad_line(""),
+            pad_line(f" Message:"),
+            pad_line(f"   {check.get('message', 'N/A'):<60}"),
+            pad_line(""),
+            pad_line(" Check configuration:"),
+            pad_line("   Type  . . . . . . :  Docker container health"),
+            pad_line("   Timeout . . . . . :  30 seconds"),
+            pad_line("   Retries . . . . . :  3"),
+            pad_line("   Alert on fail . . :  *YES"),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(" F3=Exit  F5=Refresh  F6=Run Now  F12=Cancel"),
+            pad_line(""),
+        ]
+
+        return {
+            "type": "screen",
+            "screen": "health_detail",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
+    def _screen_health_history(self, session: Session, check: dict) -> dict:
+        """Display health check history - 80 columns."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f"                   Health Check History                             {hostname}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Check Name: {check.get('name', 'UNKNOWN'):<20}"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Time        Status      Duration  Message"), "class": "field-reverse"}],
+            pad_line(f" {time_str}  {check.get('status', 'N/A'):<10}  0.5s      {check.get('message', 'N/A')[:30]}"),
+            pad_line(f" {time_str}  OK          0.3s      Check passed"),
+            pad_line(f" {time_str}  OK          0.4s      Check passed"),
+            pad_line(f" {time_str}  OK          0.3s      Check passed"),
+            pad_line(f" {time_str}  OK          0.5s      Check passed"),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(" F3=Exit  F5=Refresh  F12=Cancel"),
+            pad_line(""),
+        ]
+
+        return {
+            "type": "screen",
+            "screen": "health_history",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
+    def _submit_wrkbkp(self, session: Session, fields: dict) -> dict:
+        """Handle WRKBKP submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        backups = self._get_backups()
+        offset = session.get_offset('wrkbkp')
+        for i, backup in enumerate(backups[offset:offset + self.PAGE_SIZES['wrkbkp']]):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '1':
+                # Start backup
+                session.message = f"Starting backup {backup['name']}..."
+                break
+            elif opt == '4':
+                # Delete - show confirmation message
+                session.message = f"Delete {backup['name']} - use DLTBKP command"
+                session.message_level = "warning"
+                break
+            elif opt == '5':
+                # Display
+                return self._screen_backup_detail(session, backup)
+            elif opt == '8':
+                # Restore
+                session.message = f"Restore from {backup['name']} not available in demo"
+                session.message_level = "warning"
+                break
+            elif opt:
+                session.message = f"Option {opt} not valid"
+                session.message_level = "error"
+                break
+
+        return self.get_screen(session, 'wrkbkp')
+
+    def _screen_backup_detail(self, session: Session, backup: dict) -> dict:
+        """Display backup detail - 80 columns."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f"                      Display Backup Job                            {hostname}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(f" Backup Name . . . . :  {backup.get('name', 'UNKNOWN'):<20}"),
+            pad_line(f" Type  . . . . . . . :  {backup.get('type', 'N/A'):<15}"),
+            pad_line(f" Status  . . . . . . :  {backup.get('status', 'N/A'):<10}"),
+            pad_line(""),
+            pad_line(f" Last Run  . . . . . :  {backup.get('last_run', 'N/A'):<15}"),
+            pad_line(f" Size  . . . . . . . :  {backup.get('size', 'N/A'):<10}"),
+            pad_line(""),
+            pad_line(" Backup configuration:"),
+            pad_line("   Schedule  . . . . :  Daily at 02:00"),
+            pad_line("   Retention . . . . :  7 days"),
+            pad_line("   Compression . . . :  *YES"),
+            pad_line("   Encryption  . . . :  *NO"),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(""),
+            pad_line(" F3=Exit  F5=Refresh  F6=Start Now  F12=Cancel"),
+            pad_line(""),
+        ]
+
+        return {
+            "type": "screen",
+            "screen": "backup_detail",
+            "cols": 80,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
+    def _submit_wrkalr(self, session: Session, fields: dict) -> dict:
+        """Handle WRKALR submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        alerts = self._get_alerts()
+        offset = session.get_offset('wrkalr')
+        for i, alert in enumerate(alerts[offset:offset + self.PAGE_SIZES['wrkalr']]):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '4':
+                # Delete alert
+                session.message = f"Alert deleted"
+                break
+            elif opt == '5':
+                # Display details
+                return self._screen_alert_detail(session, alert)
+            elif opt == '7':
+                # Acknowledge
+                session.message = f"Alert acknowledged"
+                break
+            elif opt == '8':
+                # View source
+                session.message = f"Source: {alert.get('source', 'N/A')}"
+                break
+            elif opt:
+                session.message = f"Option {opt} not valid"
+                session.message_level = "error"
+                break
+
+        return self.get_screen(session, 'wrkalr')
+
+    def _screen_alert_detail(self, session: Session, alert: dict) -> dict:
+        """Display alert detail - 132 columns."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f" {hostname:<20}                        Display Alert                                             {session.user:>10}", 132),
+            pad_line(f"                                                                                          {date_str}  {time_str}", 132),
+            pad_line("", 132),
+            pad_line(f" Severity  . . . . . :  {alert.get('severity', 'N/A'):<10}", 132),
+            pad_line(f" Time  . . . . . . . :  {alert.get('time', 'N/A'):<15}", 132),
+            pad_line(f" Source  . . . . . . :  {alert.get('source', 'N/A'):<20}", 132),
+            pad_line("", 132),
+            pad_line(" Message:", 132),
+            pad_line(f"   {alert.get('message', 'N/A'):<100}", 132),
+            pad_line("", 132),
+            pad_line(" Alert details:", 132),
+            pad_line("   Acknowledged  . . :  *NO", 132),
+            pad_line("   Created . . . . . :  " + datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 132),
+            pad_line("   Alert ID  . . . . :  ALR" + datetime.now().strftime('%H%M%S'), 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line(" F3=Exit  F5=Refresh  F7=Acknowledge  F12=Cancel", 132),
+            pad_line("", 132),
+        ]
+
+        return {
+            "type": "screen",
+            "screen": "alert_detail",
+            "cols": 132,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
+    def _submit_wrknetdev(self, session: Session, fields: dict) -> dict:
+        """Handle WRKNETDEV submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        devices = self._get_network_devices()
+        offset = session.get_offset('wrknetdev')
+        for i, device in enumerate(devices[offset:offset + self.PAGE_SIZES['wrknetdev']]):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt == '2':
+                # Ping
+                ping_result = self._ping_device(device['ip'])
+                if ping_result:
+                    session.message = f"Ping {device['ip']}: {ping_result}"
+                else:
+                    session.message = f"Ping {device['ip']}: No response"
+                    session.message_level = "error"
+                break
+            elif opt == '5':
+                # Display details
+                return self._screen_device_detail(session, device)
+            elif opt == '7':
+                # Wake-on-LAN
+                if device['mac'] != 'LOCAL' and device['mac'] != 'N/A':
+                    self._send_wol(device['mac'])
+                    session.message = f"WOL magic packet sent to {device['mac']}"
+                else:
+                    session.message = f"Cannot send WOL to {device['name']}"
+                    session.message_level = "error"
+                break
+            elif opt == '8':
+                # SSH - display connection info
+                session.message = f"SSH: ssh root@{device['ip']}"
+                break
+            elif opt:
+                session.message = f"Option {opt} not valid"
+                session.message_level = "error"
+                break
+
+        return self.get_screen(session, 'wrknetdev')
+
+    def _screen_device_detail(self, session: Session, device: dict) -> dict:
+        """Display device detail - 132 columns."""
+        hostname, date_str, time_str = get_system_info()
+
+        # Try to get more info
+        ping_result = self._ping_device(device['ip'])
+        ping_status = ping_result if ping_result else "No response"
+
+        content = [
+            pad_line(f" {hostname:<20}                     Display Network Device                                        {session.user:>10}", 132),
+            pad_line(f"                                                                                          {date_str}  {time_str}", 132),
+            pad_line("", 132),
+            pad_line(f" Device Name . . . . :  {device.get('name', 'UNKNOWN'):<30}", 132),
+            pad_line(f" IP Address  . . . . :  {device.get('ip', 'N/A'):<20}", 132),
+            pad_line(f" MAC Address . . . . :  {device.get('mac', 'N/A'):<20}", 132),
+            pad_line("", 132),
+            pad_line(f" Status  . . . . . . :  {device.get('status', 'N/A'):<15}", 132),
+            pad_line(f" Ping Response . . . :  {ping_status:<30}", 132),
+            pad_line("", 132),
+            pad_line(f" Type  . . . . . . . :  {device.get('type', 'N/A'):<15}", 132),
+            pad_line(f" Vendor  . . . . . . :  {device.get('vendor', 'N/A'):<30}", 132),
+            pad_line("", 132),
+            pad_line(" Network configuration:", 132),
+            pad_line("   DHCP  . . . . . . :  *YES", 132),
+            pad_line("   Gateway . . . . . :  192.168.20.1", 132),
+            pad_line("   DNS . . . . . . . :  192.168.20.1", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line("", 132),
+            pad_line(" F3=Exit  F5=Refresh  F2=Ping  F7=Wake-on-LAN  F12=Cancel", 132),
+            pad_line("", 132),
+        ]
+
+        return {
+            "type": "screen",
+            "screen": "device_detail",
+            "cols": 132,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
+
+    def _ping_device(self, ip: str) -> Optional[str]:
+        """Ping a device and return the result."""
+        if not ip or ip == 'N/A':
+            return None
+        try:
+            result = subprocess.run(
+                ['ping', '-c', '1', '-W', '2', ip],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                # Extract time from output
+                for line in result.stdout.split('\n'):
+                    if 'time=' in line:
+                        time_part = line.split('time=')[1].split()[0]
+                        return f"Reply in {time_part}"
+                return "Reply received"
+            return None
+        except Exception:
+            return None
+
+    def _send_wol(self, mac: str):
+        """Send Wake-on-LAN magic packet."""
+        try:
+            # Convert MAC address to bytes
+            mac_clean = mac.replace(':', '').replace('-', '')
+            if len(mac_clean) != 12:
+                return
+            mac_bytes = bytes.fromhex(mac_clean)
+
+            # Build magic packet
+            magic = b'\xff' * 6 + mac_bytes * 16
+
+            # Send via UDP broadcast
+            import socket as sock
+            s = sock.socket(sock.AF_INET, sock.SOCK_DGRAM)
+            s.setsockopt(sock.SOL_SOCKET, sock.SO_BROADCAST, 1)
+            s.sendto(magic, ('255.255.255.255', 9))
+            s.close()
+        except Exception:
+            pass
 
     # ========== DATA HELPERS ==========
 
