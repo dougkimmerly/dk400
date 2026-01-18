@@ -684,6 +684,16 @@ class ScreenManager:
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
         """Handle Roll Up/Roll Down (page up/down)."""
+        # Special handling for multi-page screens (not list-based)
+        if screen == 'user_display':
+            page = session.context.get('usrprf_page', 1)
+            if direction == 'down' and page < 3:
+                session.context['usrprf_page'] = page + 1
+            elif direction == 'up' and page > 1:
+                session.context['usrprf_page'] = page - 1
+            return self.get_screen(session, screen)
+
+        # Standard list-based pagination
         page_size = self.PAGE_SIZES.get(screen, 10)
         current_offset = session.get_offset(screen)
 
