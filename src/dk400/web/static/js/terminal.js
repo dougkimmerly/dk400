@@ -25,6 +25,42 @@ class Terminal5250 {
         this.render();
         this.connect();
         this.setupKeyboardHandler();
+        this.setupResizeHandler();
+        this.adjustFontSize();
+    }
+
+    setupResizeHandler() {
+        window.addEventListener('resize', () => this.adjustFontSize());
+    }
+
+    adjustFontSize() {
+        const screen = this.container.querySelector('.terminal-screen');
+        if (!screen) return;
+
+        const cols = this.cols || 80;
+        const rows = 27; // 24 content + 3 for function keys and padding
+
+        // Calculate available space (with some margin)
+        const availWidth = window.innerWidth * 0.98;
+        const availHeight = window.innerHeight * 0.98;
+
+        // Calculate font size based on character cell dimensions
+        // A monospace character is roughly 0.6 times as wide as it is tall
+        const charAspect = 0.6;
+
+        // Calculate font size to fit width
+        const fontByWidth = availWidth / (cols * charAspect);
+
+        // Calculate font size to fit height (line-height is 1.2em)
+        const fontByHeight = availHeight / (rows * 1.2);
+
+        // Use the smaller of the two to ensure it fits
+        const fontSize = Math.floor(Math.min(fontByWidth, fontByHeight));
+
+        // Clamp to reasonable range
+        const clampedSize = Math.max(10, Math.min(fontSize, 32));
+
+        screen.style.fontSize = `${clampedSize}px`;
     }
 
     connect() {
@@ -89,6 +125,8 @@ class Terminal5250 {
         this.screenData = data.content || [];
         this.inputFields = data.fields || [];
         this.activeFieldIndex = data.activeField || 0;
+
+        const oldCols = this.cols;
         this.cols = data.cols || 80;
 
         // Apply screen width class
@@ -96,6 +134,11 @@ class Terminal5250 {
         if (screen) {
             screen.classList.remove('cols-80', 'cols-132');
             screen.classList.add(`cols-${this.cols}`);
+        }
+
+        // Recalculate font size if columns changed
+        if (oldCols !== this.cols) {
+            this.adjustFontSize();
         }
 
         this.renderScreen();

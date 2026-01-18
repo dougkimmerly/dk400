@@ -60,20 +60,16 @@ html, body {
     background: #000;
 }
 
-/* Terminal screen - centered fixed-size box */
+/* Terminal screen - auto-sized by JavaScript */
 .terminal-screen {
     /* Use monospace font - critical for alignment */
     font-family: '3270', 'IBM Plex Mono', 'Consolas', 'Monaco', monospace;
-    font-size: 16px;
+    font-size: 16px; /* Default, overridden by JS */
     line-height: var(--char-height);
     letter-spacing: 0;
 
     color: var(--phosphor-green);
     background: var(--screen-black);
-
-    /* Default 80 columns */
-    width: calc(80ch + 2ch);
-    min-width: calc(80ch + 2ch);
 
     padding: 1ch;
     position: relative;
@@ -87,33 +83,11 @@ html, body {
 /* 80 column mode */
 .terminal-screen.cols-80 {
     width: calc(80ch + 2ch);
-    min-width: calc(80ch + 2ch);
 }
 
-/* 132 column mode - smaller font to fit */
+/* 132 column mode */
 .terminal-screen.cols-132 {
     width: calc(132ch + 2ch);
-    min-width: calc(132ch + 2ch);
-    font-size: 12px;
-}
-
-/* Responsive scaling - shrink font if viewport too small */
-@media (max-width: 720px) {
-    .terminal-screen {
-        font-size: 12px;
-    }
-}
-
-@media (max-width: 540px) {
-    .terminal-screen {
-        font-size: 10px;
-    }
-}
-
-@media (max-height: 500px) {
-    .terminal-screen {
-        font-size: 12px;
-    }
 }
 
 /* Screen content area */
