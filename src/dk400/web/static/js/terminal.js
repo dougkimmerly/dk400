@@ -18,6 +18,10 @@ class Terminal5250 {
         this.cols = 80;
         this.rows = 24;
 
+        // System busy indicator
+        this.busyStartTime = null;
+        this.busyTimerInterval = null;
+
         this.init();
     }
 
@@ -104,6 +108,9 @@ class Terminal5250 {
     }
 
     handleMessage(data) {
+        // Hide busy indicator on any response
+        this.hideBusy();
+
         switch (data.type) {
             case 'screen':
                 this.updateScreen(data);
@@ -308,6 +315,7 @@ class Terminal5250 {
             fieldValues[fieldId] = input.value;
         });
 
+        this.showBusy();
         this.send({
             action: 'submit',
             screen: this.currentScreen,
@@ -329,6 +337,7 @@ class Terminal5250 {
             fieldValues[fieldId] = input.value;
         });
 
+        this.showBusy();
         this.send({
             action: 'function_key',
             key: key,
@@ -438,6 +447,37 @@ class Terminal5250 {
         }
     }
 
+    showBusy() {
+        this.busyStartTime = Date.now();
+        const indicator = this.container.querySelector('.system-busy');
+        if (indicator) {
+            indicator.classList.add('active');
+            this.updateBusyTimer();
+            this.busyTimerInterval = setInterval(() => this.updateBusyTimer(), 100);
+        }
+    }
+
+    hideBusy() {
+        const indicator = this.container.querySelector('.system-busy');
+        if (indicator) {
+            indicator.classList.remove('active');
+        }
+        if (this.busyTimerInterval) {
+            clearInterval(this.busyTimerInterval);
+            this.busyTimerInterval = null;
+        }
+        this.busyStartTime = null;
+    }
+
+    updateBusyTimer() {
+        if (!this.busyStartTime) return;
+        const elapsed = (Date.now() - this.busyStartTime) / 1000;
+        const timerEl = this.container.querySelector('.system-busy .timer');
+        if (timerEl) {
+            timerEl.textContent = elapsed.toFixed(1) + 's';
+        }
+    }
+
     escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
@@ -457,6 +497,10 @@ class Terminal5250 {
                     <span class="fkey">Enter=Submit</span>
                     <span class="fkey">Shift+Enter=Field Exit</span>
                 </div>
+            </div>
+            <div class="system-busy">
+                <span class="indicator">X</span>
+                <span class="timer">0.0s</span>
             </div>
             <div class="scanlines"></div>
             <div class="screen-flicker"></div>

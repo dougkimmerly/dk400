@@ -296,3 +296,30 @@ html, body {
 .session-ended p {
     color: var(--phosphor-dim);
 }
+
+/* System busy indicator */
+.system-busy {
+    position: fixed;
+    bottom: 1ch;
+    right: 2ch;
+    color: var(--phosphor-bright);
+    font-family: '3270', 'IBM Plex Mono', monospace;
+    font-size: 14px;
+    text-shadow: 0 0 8px var(--phosphor-glow);
+    z-index: 200;
+    display: none;
+}
+
+.system-busy.active {
+    display: block;
+}
+
+.system-busy .indicator {
+    color: var(--warning-yellow);
+    text-shadow: 0 0 8px rgba(255, 255, 85, 0.5);
+}
+
+.system-busy .timer {
+    color: var(--phosphor-dim);
+    margin-left: 1ch;
+}
