@@ -5533,7 +5533,7 @@ class ScreenManager:
         fields = []
         for i, e in enumerate(entries):
             sched_time = str(e.get('schedule_time', ''))[:5] if e.get('schedule_time') else ''
-            next_run = str(e.get('next_run_time', ''))[:16] if e.get('next_run_time') else ''
+            next_run = str(e.get('next_run', ''))[:16] if e.get('next_run') else ''
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
                 {"type": "text", "text": f"  {e['name']:<18} {e['frequency']:<10} {sched_time:<8} {e['status']:<10} {next_run}"},

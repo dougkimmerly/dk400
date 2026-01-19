@@ -3623,12 +3623,12 @@ def release_spooled_file(splf_id: int) -> tuple[bool, str]:
 
 # =============================================================================
 # Job Schedule Entries (AS/400-style WRKJOBSCDE)
+# Uses qsys._jobscde table
 # =============================================================================
 
-def add_job_schedule_entry(name: str, command: str, description: str = '',
-                           frequency: str = '*DAILY', schedule_time: str = '00:00',
-                           days_of_week: str = None, day_of_month: int = None,
-                           schedule_date: str = None, job_description: str = 'QBATCH',
+def add_job_schedule_entry(name: str, command: str, text: str = '',
+                           frequency: str = '*DAILY', schedule_time: str = None,
+                           days_of_week: str = None, schedule_date: str = None,
                            created_by: str = 'SYSTEM') -> tuple[bool, str]:
     """Add a job schedule entry (ADDJOBSCDE)."""
     name = name.upper().strip()[:20]
@@ -3639,18 +3639,19 @@ def add_job_schedule_entry(name: str, command: str, description: str = '',
     if not command:
         return False, "Command is required"
 
-    if frequency not in ('*ONCE', '*DAILY', '*WEEKLY', '*MONTHLY'):
-        return False, "Frequency must be *ONCE, *DAILY, *WEEKLY, or *MONTHLY"
+    valid_freq = ('*ONCE', '*HOURLY', '*DAILY', '*WEEKLY', '*MONTHLY')
+    if frequency.upper() not in valid_freq:
+        return False, f"Frequency must be one of: {', '.join(valid_freq)}"
 
     try:
         with get_cursor() as cursor:
             cursor.execute("""
-                INSERT INTO job_schedule_entries (name, description, command, job_description,
-                                                  frequency, schedule_time, days_of_week,
-                                                  day_of_month, schedule_date, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """, (name, description, command, job_description, frequency,
-                  schedule_time, days_of_week, day_of_month, schedule_date, created_by))
+                INSERT INTO qsys._jobscde (name, text, command, frequency,
+                                           schedule_time, days_of_week, schedule_date,
+                                           status, created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, '*ACTIVE', %s)
+            """, (name, text, command, frequency.upper(),
+                  schedule_time, days_of_week, schedule_date, created_by))
         return True, f"Job schedule entry {name} added"
     except psycopg2.IntegrityError:
         return False, f"Job schedule entry {name} already exists"
@@ -3664,7 +3665,7 @@ def remove_job_schedule_entry(name: str) -> tuple[bool, str]:
 
     try:
         with get_cursor() as cursor:
-            cursor.execute("DELETE FROM job_schedule_entries WHERE name = %s", (name,))
+            cursor.execute("DELETE FROM qsys._jobscde WHERE name = %s", (name,))
             if cursor.rowcount == 0:
                 return False, f"Job schedule entry {name} not found"
         return True, f"Job schedule entry {name} removed"
@@ -3678,7 +3679,7 @@ def get_job_schedule_entry(name: str) -> dict | None:
 
     try:
         with get_cursor() as cursor:
-            cursor.execute("SELECT * FROM job_schedule_entries WHERE name = %s", (name,))
+            cursor.execute("SELECT * FROM qsys._jobscde WHERE name = %s", (name,))
             row = cursor.fetchone()
             if row:
                 return dict(row)
@@ -3694,11 +3695,11 @@ def list_job_schedule_entries(status: str = None) -> list[dict]:
         with get_cursor() as cursor:
             if status:
                 cursor.execute(
-                    "SELECT * FROM job_schedule_entries WHERE status = %s ORDER BY name",
+                    "SELECT * FROM qsys._jobscde WHERE status = %s ORDER BY name",
                     (status.upper(),)
                 )
             else:
-                cursor.execute("SELECT * FROM job_schedule_entries ORDER BY name")
+                cursor.execute("SELECT * FROM qsys._jobscde ORDER BY name")
             for row in cursor.fetchall():
                 entries.append(dict(row))
     except Exception as e:
@@ -3713,7 +3714,7 @@ def hold_job_schedule_entry(name: str) -> tuple[bool, str]:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "UPDATE job_schedule_entries SET status = '*HELD' WHERE name = %s",
+                "UPDATE qsys._jobscde SET status = '*HELD' WHERE name = %s",
                 (name,)
             )
             if cursor.rowcount == 0:
@@ -3730,7 +3731,7 @@ def release_job_schedule_entry(name: str) -> tuple[bool, str]:
     try:
         with get_cursor() as cursor:
             cursor.execute(
-                "UPDATE job_schedule_entries SET status = '*ACTIVE' WHERE name = %s",
+                "UPDATE qsys._jobscde SET status = '*ACTIVE' WHERE name = %s",
                 (name,)
             )
             if cursor.rowcount == 0:
@@ -3744,31 +3745,25 @@ def change_job_schedule_entry(name: str, **kwargs) -> tuple[bool, str]:
     """Change a job schedule entry (CHGJOBSCDE)."""
     name = name.upper().strip()
 
-    allowed_fields = ['description', 'command', 'frequency', 'schedule_time',
-                      'days_of_week', 'day_of_month', 'schedule_date', 'job_description']
+    allowed_fields = ['text', 'command', 'frequency', 'schedule_time',
+                      'days_of_week', 'schedule_date', 'status']
 
     updates = {k: v for k, v in kwargs.items() if k in allowed_fields and v is not None}
 
     if not updates:
         return False, "No changes specified"
 
-    updates['updated_at'] = 'CURRENT_TIMESTAMP'
-    updates['updated_by'] = kwargs.get('updated_by', 'SYSTEM')
-
     try:
         with get_cursor() as cursor:
             set_parts = []
             values = []
             for k, v in updates.items():
-                if v == 'CURRENT_TIMESTAMP':
-                    set_parts.append(f"{k} = CURRENT_TIMESTAMP")
-                else:
-                    set_parts.append(f"{k} = %s")
-                    values.append(v)
+                set_parts.append(f"{k} = %s")
+                values.append(v)
 
             values.append(name)
             cursor.execute(f"""
-                UPDATE job_schedule_entries SET {', '.join(set_parts)}
+                UPDATE qsys._jobscde SET {', '.join(set_parts)}
                 WHERE name = %s
             """, values)
             if cursor.rowcount == 0:
