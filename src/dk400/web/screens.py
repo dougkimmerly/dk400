@@ -72,7 +72,7 @@ from src.dk400.web.database import (
     # Database utilities
     get_cursor,
     # System History Log
-    log_event,
+    log_event, get_log_entries,
 )
 from psycopg2 import sql
 from src.dk400.web.active_sessions import (
@@ -2839,12 +2839,40 @@ class ScreenManager:
             pass
 
     def _get_system_logs(self, limit: int = 50) -> list[dict]:
-        """Get system logs."""
+        """Get system logs from qhst table and docker logs."""
         logs = []
 
+        # Get entries from system history log (qhst)
+        try:
+            qhst_entries = get_log_entries(limit=limit)
+            for entry in qhst_entries:
+                severity = 'INFO'
+                action = entry.get('action', '')
+                if action in ('ERROR', 'FAILED'):
+                    severity = 'ERROR'
+                elif action in ('WARN', 'WARNING'):
+                    severity = 'WARN'
+
+                timestamp = entry.get('timestamp')
+                if timestamp:
+                    time_str = timestamp.strftime('%H:%M:%S')
+                else:
+                    time_str = '??:??:??'
+
+                logs.append({
+                    'time': time_str,
+                    'severity': severity,
+                    'source': action[:10] if action else 'QHST',
+                    'message': entry.get('details', '')[:90],
+                    'timestamp': timestamp,  # Keep for sorting
+                })
+        except Exception:
+            pass
+
+        # Also get docker logs from celery
         try:
             result = subprocess.run(
-                ['docker', 'logs', '--tail', str(limit), 'celery-qbatch'],
+                ['docker', 'logs', '--tail', str(limit // 2), 'celery-qbatch'],
                 capture_output=True, text=True, timeout=10
             )
             output = result.stderr or result.stdout
@@ -2862,9 +2890,17 @@ class ScreenManager:
                             'severity': severity,
                             'source': 'QBATCH',
                             'message': line[:90],
+                            'timestamp': datetime.now(),
                         })
         except Exception:
             pass
+
+        # Sort by timestamp descending (newest first)
+        logs.sort(key=lambda x: x.get('timestamp') or datetime.min, reverse=True)
+
+        # Remove timestamp key from results and limit
+        for log in logs:
+            log.pop('timestamp', None)
 
         if not logs:
             logs.append({
@@ -2874,7 +2910,7 @@ class ScreenManager:
                 'message': 'No log entries found',
             })
 
-        return logs
+        return logs[:limit]
 
     def _get_available_tasks(self) -> list[str]:
         """Get available Celery tasks."""
