@@ -71,6 +71,8 @@ from src.dk400.web.database import (
     get_journal_entries, get_journal_entry, count_journal_entries,
     # Database utilities
     get_cursor,
+    # System History Log
+    log_event,
 )
 from psycopg2 import sql
 from src.dk400.web.active_sessions import (
@@ -764,6 +766,14 @@ class ScreenManager:
         """Execute an AS/400 command."""
         command = command.upper().strip()
 
+        # Handle sign-off specially to log the event
+        if command in ('SIGNOFF', '90'):
+            log_event('SIGNOFF', session.user, f"User {session.user} signed off",
+                      session.context.get('ip_address'))
+            session.user = ""
+            session.message = ""
+            return self.get_screen(session, 'signon')
+
         # Check numeric shortcuts first (from COMMANDS dict)
         if command in self.COMMANDS:
             session.message = ""
@@ -893,6 +903,9 @@ class ScreenManager:
         session.current_library = get_user_current_library(user)
 
         session.message = ""  # Clear any previous error message
+
+        # Log successful sign-on
+        log_event('SIGNON', user, f"User {user} signed on", session.context.get('ip_address'))
 
         # Check for default password (password == username) - force change
         if password.upper() == user:
@@ -1850,6 +1863,9 @@ class ScreenManager:
             result_id = self._submit_celery_task(task, params, int(delay) if delay.isdigit() else 0)
             session.message = f"Job submitted: {result_id[:8]}"
             session.message_level = "info"
+            # Log job submission
+            log_event('SBMJOB', session.user, f"Job {task} submitted (ID: {result_id[:8]})",
+                      session.context.get('ip_address'))
         except Exception as e:
             session.message = f"Error: {str(e)[:50]}"
             session.message_level = "error"

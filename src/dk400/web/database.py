@@ -1109,6 +1109,68 @@ def delete_library(name: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+# =============================================================================
+# System History Log (QHST)
+# =============================================================================
+
+def log_event(action: str, username: str = None, details: str = None, ip_address: str = None) -> bool:
+    """Log an event to the system history log (qhst).
+
+    Args:
+        action: Action type (e.g., 'SIGNON', 'SIGNOFF', 'SBMJOB', 'JOBRUN')
+        username: User who performed the action
+        details: Additional details about the event
+        ip_address: IP address of the client
+
+    Returns:
+        True if logged successfully, False otherwise
+    """
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO qsys.qhst (username, action, details, ip_address)
+                VALUES (%s, %s, %s, %s)
+            """, (username, action, details, ip_address))
+        return True
+    except Exception as e:
+        logger.error(f"Failed to log event {action}: {e}")
+        return False
+
+
+def get_log_entries(limit: int = 100, username: str = None, action: str = None) -> list[dict]:
+    """Get log entries from system history.
+
+    Args:
+        limit: Maximum number of entries to return
+        username: Filter by username (optional)
+        action: Filter by action type (optional)
+
+    Returns:
+        List of log entries, newest first
+    """
+    try:
+        with get_cursor() as cursor:
+            query = "SELECT * FROM qsys.qhst WHERE 1=1"
+            params = []
+
+            if username:
+                query += " AND username = %s"
+                params.append(username)
+
+            if action:
+                query += " AND action = %s"
+                params.append(action)
+
+            query += " ORDER BY timestamp DESC LIMIT %s"
+            params.append(limit)
+
+            cursor.execute(query, tuple(params))
+            return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Failed to get log entries: {e}")
+        return []
+
+
 def list_libraries() -> list[dict]:
     """List all libraries (AS/400 WRKLIB)."""
     try:
