@@ -459,6 +459,86 @@ CREATE TABLE IF NOT EXISTS musiclib.audio_features (
     acousticness DOUBLE PRECISION,
     instrumentalness DOUBLE PRECISION
 );
+
+-- =============================================================================
+-- Journaling Tables (AS/400 Journal/Receiver System)
+-- =============================================================================
+
+-- Journals (*JRN objects)
+CREATE TABLE IF NOT EXISTS qsys._jrn (
+    name VARCHAR(10) NOT NULL,
+    library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    text VARCHAR(50) DEFAULT '',
+    status VARCHAR(10) DEFAULT '*ACTIVE',
+    images VARCHAR(10) DEFAULT '*AFTER',
+    current_receiver VARCHAR(10),
+    total_entries BIGINT DEFAULT 0,
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (name, library)
+);
+
+-- Journal Receivers (*JRNRCV objects)
+CREATE TABLE IF NOT EXISTS qsys._jrnrcv (
+    name VARCHAR(10) NOT NULL,
+    library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    journal_name VARCHAR(10) NOT NULL,
+    journal_library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    text VARCHAR(50) DEFAULT '',
+    status VARCHAR(10) DEFAULT '*ATTACHED',
+    sequence INTEGER DEFAULT 1,
+    first_entry BIGINT,
+    last_entry BIGINT,
+    entry_count BIGINT DEFAULT 0,
+    size_kb BIGINT DEFAULT 0,
+    attach_time TIMESTAMP,
+    detach_time TIMESTAMP,
+    created_by VARCHAR(10),
+    created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (name, library)
+);
+
+-- Journal Entries (the actual journal data)
+CREATE TABLE IF NOT EXISTS qsys._jrne (
+    id BIGSERIAL PRIMARY KEY,
+    receiver_name VARCHAR(10) NOT NULL,
+    receiver_library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    journal_code CHAR(1) DEFAULT 'F',
+    entry_type CHAR(2) NOT NULL,
+    entry_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    job_name VARCHAR(26),
+    job_user VARCHAR(10),
+    job_number VARCHAR(6),
+    program_name VARCHAR(10),
+    object_schema VARCHAR(128),
+    object_name VARCHAR(128),
+    object_member VARCHAR(10) DEFAULT 'DATA',
+    record_key TEXT,
+    relative_record BIGINT,
+    before_image JSONB,
+    after_image JSONB,
+    commit_cycle_id BIGINT
+);
+
+-- Indexes for efficient journal queries
+CREATE INDEX IF NOT EXISTS idx_jrne_receiver ON qsys._jrne(receiver_name, receiver_library);
+CREATE INDEX IF NOT EXISTS idx_jrne_object ON qsys._jrne(object_schema, object_name);
+CREATE INDEX IF NOT EXISTS idx_jrne_time ON qsys._jrne(entry_time);
+CREATE INDEX IF NOT EXISTS idx_jrne_type ON qsys._jrne(journal_code, entry_type);
+CREATE INDEX IF NOT EXISTS idx_jrne_user ON qsys._jrne(job_user);
+
+-- Journaled Files (which tables are being journaled)
+CREATE TABLE IF NOT EXISTS qsys._jrnpf (
+    schema_name VARCHAR(128) NOT NULL,
+    table_name VARCHAR(128) NOT NULL,
+    journal_name VARCHAR(10) NOT NULL,
+    journal_library VARCHAR(10) NOT NULL DEFAULT 'QGPL',
+    images VARCHAR(10) DEFAULT '*AFTER',
+    omit_open_close BOOLEAN DEFAULT TRUE,
+    started_by VARCHAR(10),
+    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (schema_name, table_name)
+);
 """
 
 # SQL template for creating object tables within a library schema
