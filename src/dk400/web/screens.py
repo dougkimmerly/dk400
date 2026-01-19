@@ -2822,10 +2822,10 @@ class ScreenManager:
 
         if not services:
             services.append({
-                'name': 'DOCKER',
-                'status': 'MSGW',
+                'name': '(none)',
+                'status': 'N/A',
                 'elapsed': '',
-                'image': 'unavailable',
+                'image': 'Docker not available on this host',
                 'ports': '',
             })
 
