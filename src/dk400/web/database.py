@@ -11,19 +11,37 @@ from contextlib import contextmanager
 from typing import Optional, Generator
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from urllib.parse import urlparse
 import logging
 
 logger = logging.getLogger(__name__)
 
 
+def _parse_database_url(url: str) -> dict:
+    """Parse DATABASE_URL into connection parameters."""
+    parsed = urlparse(url)
+    return {
+        'host': parsed.hostname or 'localhost',
+        'port': parsed.port or 5432,
+        'dbname': parsed.path.lstrip('/') or 'dk400',
+        'user': parsed.username or 'dk400',
+        'password': parsed.password or '',
+        'sslmode': 'require',  # Heroku requires SSL
+    }
+
+
 # Database configuration from environment
-DB_CONFIG = {
-    'host': os.environ.get('DK400_DB_HOST', 'localhost'),
-    'port': int(os.environ.get('DK400_DB_PORT', 5432)),
-    'dbname': os.environ.get('DK400_DB_NAME', 'dk400'),
-    'user': os.environ.get('DK400_DB_USER', 'dk400'),
-    'password': os.environ.get('DK400_DB_PASSWORD', 'dk400secret'),
-}
+# Support both DATABASE_URL (Heroku) and individual DK400_DB_* vars
+if os.environ.get('DATABASE_URL'):
+    DB_CONFIG = _parse_database_url(os.environ['DATABASE_URL'])
+else:
+    DB_CONFIG = {
+        'host': os.environ.get('DK400_DB_HOST', 'localhost'),
+        'port': int(os.environ.get('DK400_DB_PORT', 5432)),
+        'dbname': os.environ.get('DK400_DB_NAME', 'dk400'),
+        'user': os.environ.get('DK400_DB_USER', 'dk400'),
+        'password': os.environ.get('DK400_DB_PASSWORD', 'dk400secret'),
+    }
 
 
 # Schema definitions - All system tables live in QSYS schema (authentic AS/400)
@@ -364,8 +382,77 @@ CREATE TABLE IF NOT EXISTS qsys._jrnpf (
 INSERT INTO qsys._lib (name, type, text, created_by) VALUES
     ('QSYS', '*PROD', 'System Library', 'QSECOFR'),
     ('QGPL', '*PROD', 'General Purpose Library', 'QSECOFR'),
-    ('QUSRSYS', '*PROD', 'User System Library', 'QSECOFR')
+    ('QUSRSYS', '*PROD', 'User System Library', 'QSECOFR'),
+    ('MUSICLIB', '*PROD', 'Music Library Database', 'QSECOFR')
 ON CONFLICT (name) DO NOTHING;
+
+-- =============================================================================
+-- MUSICLIB Schema - Demo Music Library Database
+-- =============================================================================
+CREATE SCHEMA IF NOT EXISTS musiclib;
+
+-- Tracks (main music catalog)
+CREATE TABLE IF NOT EXISTS musiclib.tracks (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    artist TEXT,
+    album TEXT,
+    genre TEXT,
+    year INTEGER,
+    duration_ms INTEGER,
+    play_count INTEGER DEFAULT 0,
+    rating INTEGER,
+    date_added TEXT,
+    last_played TEXT,
+    file_path TEXT,
+    source TEXT DEFAULT 'import'
+);
+
+CREATE INDEX IF NOT EXISTS idx_musiclib_tracks_artist ON musiclib.tracks(artist);
+CREATE INDEX IF NOT EXISTS idx_musiclib_tracks_album ON musiclib.tracks(album);
+CREATE INDEX IF NOT EXISTS idx_musiclib_tracks_genre ON musiclib.tracks(genre);
+
+-- Artists
+CREATE TABLE IF NOT EXISTS musiclib.artists (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    track_count INTEGER DEFAULT 0,
+    total_plays INTEGER DEFAULT 0,
+    genres TEXT
+);
+
+-- Playlists
+CREATE TABLE IF NOT EXISTS musiclib.playlists (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    is_smart BOOLEAN DEFAULT FALSE,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Playlist Tracks (junction table)
+CREATE TABLE IF NOT EXISTS musiclib.playlist_tracks (
+    id SERIAL PRIMARY KEY,
+    playlist_id INTEGER NOT NULL REFERENCES musiclib.playlists(id) ON DELETE CASCADE,
+    track_id INTEGER NOT NULL REFERENCES musiclib.tracks(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL,
+    added_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_musiclib_playlist_tracks_playlist ON musiclib.playlist_tracks(playlist_id);
+
+-- Audio Features (for advanced queries)
+CREATE TABLE IF NOT EXISTS musiclib.audio_features (
+    id SERIAL PRIMARY KEY,
+    track_id INTEGER NOT NULL UNIQUE REFERENCES musiclib.tracks(id) ON DELETE CASCADE,
+    energy DOUBLE PRECISION,
+    danceability DOUBLE PRECISION,
+    valence DOUBLE PRECISION,
+    tempo DOUBLE PRECISION,
+    acousticness DOUBLE PRECISION,
+    instrumentalness DOUBLE PRECISION
+);
 """
 
 # SQL template for creating object tables within a library schema

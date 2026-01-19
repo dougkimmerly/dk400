@@ -619,6 +619,11 @@ class ScreenManager:
                 return self.get_screen(session, 'wrknetdev')
             elif screen in ('user_display', 'user_chgpwd', 'user_create', 'user_change'):
                 return self.get_screen(session, 'wrkusrprf')
+            elif screen == 'force_chgpwd':
+                # Cannot cancel forced password change - sign out instead
+                session.message = "Password change required - signing out"
+                session.message_level = "warning"
+                return self.get_screen(session, 'signon')
             elif screen in ('schema_create', 'schema_detail', 'schema_tables'):
                 return self.get_screen(session, 'wrklib')  # Merged with WRKLIB
             elif screen in ('grtobjaut', 'rvkobjaut', 'dspobjaut'):
@@ -882,6 +887,14 @@ class ScreenManager:
         session.current_library = get_user_current_library(user)
 
         session.message = ""  # Clear any previous error message
+
+        # Check for default password (password == username) - force change
+        if password.upper() == user:
+            session.context['force_pwd_change'] = True
+            session.field_values['selected_user'] = user
+            session.message = "Password expired - you must change your password"
+            session.message_level = "warning"
+            return self.get_screen(session, 'force_chgpwd')
 
         return self.get_screen(session, 'main')
 
@@ -3529,6 +3542,98 @@ class ScreenManager:
         if success:
             return self.get_screen(session, 'wrkusrprf')
         return self.get_screen(session, 'user_chgpwd')
+
+    def _screen_force_chgpwd(self, session: Session) -> dict:
+        """Forced password change screen (after login with default password)."""
+        hostname, date_str, time_str = get_system_info()
+        username = session.user
+
+        content = []
+
+        logo = get_logo()
+        if logo:
+            for line in logo.split('\n'):
+                content.append(pad_line(f"  {line}"))
+
+        content.append(pad_line(""))
+        content.append(pad_line(f"  Change Password Required                             {hostname}"))
+        content.append(pad_line(f"                                                       {date_str}  {time_str}"))
+        content.append(pad_line(""))
+        content.append(pad_line(f"    User profile  . . . . . . . . . :   {username}"))
+        content.append(pad_line(""))
+
+        # Message display
+        if session.message:
+            content.append(self._message_line(session))
+        else:
+            content.append(pad_line("    Your password has expired and must be changed."))
+
+        content.append(pad_line(""))
+        content.append([
+            {"type": "text", "text": "    New password  . . . . . . . . . :   "},
+            {"type": "input", "id": "new_pwd", "width": 10, "password": True},
+        ])
+        content.append([
+            {"type": "text", "text": "    Confirm password  . . . . . . . :   "},
+            {"type": "input", "id": "confirm_pwd", "width": 10, "password": True},
+        ])
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line("    Note: Password cannot be the same as your user ID."))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(pad_line(""))
+        content.append(fkey_line("F12=Sign Out"))
+
+        return {
+            "type": "screen",
+            "screen": "force_chgpwd",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "new_pwd"},
+                {"id": "confirm_pwd"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_force_chgpwd(self, session: Session, fields: dict) -> dict:
+        """Handle forced password change submission."""
+        username = session.user
+        new_pwd = fields.get('new_pwd', '')
+        confirm_pwd = fields.get('confirm_pwd', '')
+
+        # Validate new password
+        if not new_pwd:
+            session.message = "New password required"
+            session.message_level = "error"
+            return self.get_screen(session, 'force_chgpwd')
+
+        if new_pwd != confirm_pwd:
+            session.message = "Passwords do not match"
+            session.message_level = "error"
+            return self.get_screen(session, 'force_chgpwd')
+
+        # Ensure new password is not the same as username (no default passwords!)
+        if new_pwd.upper() == username:
+            session.message = "Password cannot be the same as user ID"
+            session.message_level = "error"
+            return self.get_screen(session, 'force_chgpwd')
+
+        # Change the password
+        success, msg = user_manager.change_password(username, new_pwd)
+
+        if success:
+            session.context.pop('force_pwd_change', None)
+            session.message = "Password changed successfully"
+            session.message_level = "info"
+            return self.get_screen(session, 'main')
+
+        session.message = msg
+        session.message_level = "error"
+        return self.get_screen(session, 'force_chgpwd')
 
     def _screen_user_create(self, session: Session) -> dict:
         """Create User Profile screen - IBM CRTUSRPRF pattern."""

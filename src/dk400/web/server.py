@@ -6,15 +6,26 @@ FastAPI server with WebSocket support for the 5250 terminal emulator.
 import os
 import json
 import asyncio
-from datetime import datetime
+import secrets
+import logging
+from datetime import datetime, timedelta
 from typing import Optional
 from pathlib import Path
+from collections import defaultdict
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from src.dk400.web.screens import ScreenManager, Session
+
+logger = logging.getLogger(__name__)
+
+# Security configuration
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX_ATTEMPTS = 10  # max auth attempts per IP per window
+SESSION_TIMEOUT_MINUTES = 30  # session expires after inactivity
 
 # Get the static files directory
 STATIC_DIR = Path(__file__).parent / "static"
@@ -23,6 +34,52 @@ app = FastAPI(title="DK/400", description="AS/400 Job Queue System")
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+class RateLimiter:
+    """Simple in-memory rate limiter for authentication attempts."""
+
+    def __init__(self, window_seconds: int = 60, max_attempts: int = 10):
+        self.window = window_seconds
+        self.max_attempts = max_attempts
+        self.attempts: dict[str, list[datetime]] = defaultdict(list)
+
+    def is_allowed(self, client_ip: str) -> bool:
+        """Check if client is allowed to attempt authentication."""
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=self.window)
+
+        # Clean old attempts
+        self.attempts[client_ip] = [
+            t for t in self.attempts[client_ip] if t > cutoff
+        ]
+
+        return len(self.attempts[client_ip]) < self.max_attempts
+
+    def record_attempt(self, client_ip: str):
+        """Record an authentication attempt."""
+        self.attempts[client_ip].append(datetime.now())
+
+    def get_remaining(self, client_ip: str) -> int:
+        """Get remaining attempts for client."""
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=self.window)
+        recent = [t for t in self.attempts[client_ip] if t > cutoff]
+        return max(0, self.max_attempts - len(recent))
+
+    def cleanup(self):
+        """Remove stale entries (call periodically)."""
+        now = datetime.now()
+        cutoff = now - timedelta(seconds=self.window * 2)
+        stale_ips = [
+            ip for ip, times in self.attempts.items()
+            if all(t < cutoff for t in times)
+        ]
+        for ip in stale_ips:
+            del self.attempts[ip]
+
+
+rate_limiter = RateLimiter(RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_ATTEMPTS)
 
 
 @app.get("/")
@@ -38,30 +95,74 @@ async def health():
 
 
 class ConnectionManager:
-    """Manages WebSocket connections."""
+    """Manages WebSocket connections with secure session handling."""
 
     def __init__(self):
         self.active_connections: dict[str, WebSocket] = {}
         self.sessions: dict[str, Session] = {}
+        self.session_last_activity: dict[str, datetime] = {}
+        self.session_client_ips: dict[str, str] = {}  # Track IP per session
 
-    async def connect(self, websocket: WebSocket, session_id: str):
+    def generate_session_id(self) -> str:
+        """Generate a cryptographically secure session ID."""
+        return secrets.token_urlsafe(32)
+
+    async def connect(self, websocket: WebSocket) -> tuple[str, Session]:
+        """Accept connection and create secure session."""
         await websocket.accept()
+
+        # Generate secure session ID
+        session_id = self.generate_session_id()
+        client_ip = websocket.client.host if websocket.client else "unknown"
+
         self.active_connections[session_id] = websocket
+        self.sessions[session_id] = Session(session_id)
+        self.session_last_activity[session_id] = datetime.now()
+        self.session_client_ips[session_id] = client_ip
 
-        # Create or retrieve session
-        if session_id not in self.sessions:
-            self.sessions[session_id] = Session(session_id)
+        return session_id, self.sessions[session_id]
 
-        return self.sessions[session_id]
+    def touch_session(self, session_id: str):
+        """Update last activity time for session."""
+        if session_id in self.sessions:
+            self.session_last_activity[session_id] = datetime.now()
+
+    def is_session_expired(self, session_id: str) -> bool:
+        """Check if session has expired due to inactivity."""
+        if session_id not in self.session_last_activity:
+            return True
+        last_activity = self.session_last_activity[session_id]
+        return datetime.now() - last_activity > timedelta(minutes=SESSION_TIMEOUT_MINUTES)
+
+    def get_client_ip(self, session_id: str) -> str:
+        """Get the client IP for a session."""
+        return self.session_client_ips.get(session_id, "unknown")
 
     def disconnect(self, session_id: str):
+        """Clean up session on disconnect."""
         if session_id in self.active_connections:
             del self.active_connections[session_id]
-        # Keep session for reconnection
+        if session_id in self.sessions:
+            del self.sessions[session_id]
+        if session_id in self.session_last_activity:
+            del self.session_last_activity[session_id]
+        if session_id in self.session_client_ips:
+            del self.session_client_ips[session_id]
 
     async def send_message(self, session_id: str, message: dict):
         if session_id in self.active_connections:
             await self.active_connections[session_id].send_json(message)
+
+    def cleanup_expired_sessions(self):
+        """Remove expired sessions (call periodically)."""
+        expired = [
+            sid for sid in self.sessions
+            if self.is_session_expired(sid)
+        ]
+        for sid in expired:
+            self.disconnect(sid)
+        if expired:
+            logger.info(f"Cleaned up {len(expired)} expired sessions")
 
 
 manager = ConnectionManager()
@@ -71,16 +172,27 @@ screen_manager = ScreenManager()
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for terminal communication."""
-    # Generate session ID from client info
-    client_host = websocket.client.host if websocket.client else "unknown"
-    session_id = f"{client_host}_{id(websocket)}"
+    client_ip = websocket.client.host if websocket.client else "unknown"
 
-    session = await manager.connect(websocket, session_id)
+    # Create secure session
+    session_id, session = await manager.connect(websocket)
 
     try:
         while True:
+            # Check session expiry
+            if manager.is_session_expired(session_id):
+                await websocket.send_json({
+                    "screen": "session_expired",
+                    "message": "Session expired due to inactivity",
+                    "rows": [{"type": "text", "text": "Session expired. Please refresh to sign on again."}]
+                })
+                break
+
             data = await websocket.receive_json()
             action = data.get("action")
+
+            # Update session activity
+            manager.touch_session(session_id)
 
             if action == "init":
                 # Send the sign-on screen
@@ -91,6 +203,19 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Handle screen submission
                 screen = data.get("screen")
                 fields = data.get("fields", {})
+
+                # Rate limit authentication attempts
+                if screen == "signon":
+                    if not rate_limiter.is_allowed(client_ip):
+                        await websocket.send_json({
+                            "screen": "signon",
+                            "message": "Too many sign-on attempts. Please wait 60 seconds.",
+                            "message_level": "error",
+                            "rows": screen_manager.get_screen(session, "signon")["rows"]
+                        })
+                        continue
+                    rate_limiter.record_attempt(client_ip)
+
                 result = screen_manager.handle_submit(session, screen, fields)
                 await websocket.send_json(result)
 
@@ -124,10 +249,11 @@ async def websocket_endpoint(websocket: WebSocket):
     except WebSocketDisconnect:
         manager.disconnect(session_id)
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}")
         manager.disconnect(session_id)
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8400)
+    port = int(os.environ.get("PORT", 8400))
+    uvicorn.run(app, host="0.0.0.0", port=port)

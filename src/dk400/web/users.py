@@ -188,6 +188,9 @@ class UserManager:
     HASH_ITERATIONS = 100000
     HASH_ALGORITHM = 'sha256'
 
+    # Security parameters
+    MAX_SIGNON_ATTEMPTS = 5  # Lock account after this many failures
+
     def __init__(self):
         self._initialized = False
         self._init_database()
@@ -486,28 +489,41 @@ class UserManager:
 
         user = self.get_user(username)
         if not user:
+            # Don't reveal whether user exists
             return False, "User ID or password not valid"
 
         if user.status == "*DISABLED":
             return False, f"User profile {username} is disabled"
+
+        # Check if account is locked due to failed attempts
+        if user.signon_attempts >= self.MAX_SIGNON_ATTEMPTS:
+            return False, f"User profile {username} is locked (too many failed attempts)"
 
         # Verify password
         password_hash = self._hash_password(password, user.salt)
 
         if password_hash != user.password_hash:
             # Increment failed attempts
+            new_attempts = user.signon_attempts + 1
             try:
                 with get_cursor() as cursor:
                     cursor.execute("""
                         UPDATE qsys.qausrprf
-                        SET signon_attempts = signon_attempts + 1
+                        SET signon_attempts = %s
                         WHERE username = %s
-                    """, (username,))
+                    """, (new_attempts, username))
             except Exception:
                 pass
+
+            # Check if this attempt locks the account
+            remaining = self.MAX_SIGNON_ATTEMPTS - new_attempts
+            if remaining <= 0:
+                return False, f"User profile {username} is now locked"
+            elif remaining <= 2:
+                return False, f"User ID or password not valid ({remaining} attempts remaining)"
             return False, "User ID or password not valid"
 
-        # Successful authentication - update last signon
+        # Successful authentication - update last signon, reset attempts
         try:
             with get_cursor() as cursor:
                 cursor.execute("""
@@ -519,6 +535,27 @@ class UserManager:
             pass
 
         return True, "Sign on successful"
+
+    def unlock_user(self, username: str) -> tuple[bool, str]:
+        """Unlock a user account (reset signon attempts)."""
+        self._ensure_initialized()
+
+        username = username.upper().strip()
+
+        if not self.get_user(username):
+            return False, f"User {username} not found"
+
+        try:
+            with get_cursor() as cursor:
+                cursor.execute("""
+                    UPDATE qsys.qausrprf
+                    SET signon_attempts = 0
+                    WHERE username = %s
+                """, (username,))
+            return True, f"User {username} unlocked"
+        except Exception as e:
+            logger.error(f"Failed to unlock user {username}: {e}")
+            return False, f"Failed to unlock user: {e}"
 
     def get_user(self, username: str) -> Optional[UserProfile]:
         """Get a user profile."""
