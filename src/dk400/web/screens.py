@@ -886,7 +886,7 @@ class ScreenManager:
         session.user_class = user_profile.user_class if user_profile else "*USER"
 
         # Update active session registry with signed-on user
-        update_session_user(session.id, user)
+        update_session_user(session.session_id, user)
 
         # Load library list settings
         session.library_list = get_user_library_list(user)
