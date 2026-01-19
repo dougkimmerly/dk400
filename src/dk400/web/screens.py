@@ -21,7 +21,7 @@ from src.dk400.web.database import (
     grant_object_authority, revoke_object_authority, get_object_authorities,
     get_effective_authorities, get_user_group, AUTHORITY_GRANTS,
     get_system_value, set_system_value, list_qsysval,
-    get_system_datetime, get_system_timezone_name,
+    get_system_datetime, get_system_timezone_name, get_system_timezone,
     # Message Queues
     create_message_queue, delete_message_queue, list_message_queues,
     send_message, get_messages, mark_message_old, reply_to_message,
@@ -2844,6 +2844,7 @@ class ScreenManager:
 
         # Get entries from system history log (qhst)
         try:
+            local_tz = get_system_timezone()
             qhst_entries = get_log_entries(limit=limit)
             for entry in qhst_entries:
                 severity = 'INFO'
@@ -2855,7 +2856,12 @@ class ScreenManager:
 
                 timestamp = entry.get('timestamp')
                 if timestamp:
-                    time_str = timestamp.strftime('%H:%M:%S')
+                    # Convert UTC to local timezone
+                    if timestamp.tzinfo is None:
+                        from zoneinfo import ZoneInfo
+                        timestamp = timestamp.replace(tzinfo=ZoneInfo('UTC'))
+                    local_time = timestamp.astimezone(local_tz)
+                    time_str = local_time.strftime('%H:%M:%S')
                 else:
                     time_str = '??:??:??'
 
