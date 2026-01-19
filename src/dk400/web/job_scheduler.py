@@ -155,6 +155,14 @@ def _add_builtin_jobs():
     )
     logger.info("Added built-in job: QNTPSYNC (hourly)")
 
+    # Also add to database so it shows in WRKJOBSCDE
+    _ensure_job_in_database(
+        'QNTPSYNC',
+        'NTP Time Sync - sync system time from NTP server',
+        'QNTPSYNC',
+        '*HOURLY'
+    )
+
     # Run NTP sync immediately on startup
     scheduler.add_job(
         ntp_sync_job,
@@ -162,6 +170,26 @@ def _add_builtin_jobs():
         id='QNTPSYNC_INIT',
         name='NTP Time Sync (Initial)',
     )
+
+
+def _ensure_job_in_database(name: str, text: str, command: str, frequency: str):
+    """Ensure a job exists in the _jobscde table for WRKJOBSCDE display."""
+    try:
+        from src.dk400.web.database import get_cursor
+
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO qsys._jobscde (name, text, command, frequency, status, created_by)
+                VALUES (%s, %s, %s, %s, '*ACTIVE', 'QSYS')
+                ON CONFLICT (name) DO UPDATE
+                SET text = EXCLUDED.text,
+                    command = EXCLUDED.command,
+                    frequency = EXCLUDED.frequency,
+                    status = '*ACTIVE'
+            """, (name.upper(), text, command, frequency.upper()))
+        logger.info(f"Ensured job {name} exists in database")
+    except Exception as e:
+        logger.warning(f"Could not add job {name} to database: {e}")
 
 
 def _load_scheduled_jobs():
