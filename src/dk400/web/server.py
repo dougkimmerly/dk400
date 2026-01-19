@@ -19,8 +19,15 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.dk400.web.screens import ScreenManager, Session
+from src.dk400.web.job_scheduler import start_scheduler, stop_scheduler
 
 logger = logging.getLogger(__name__)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Security configuration
 RATE_LIMIT_WINDOW = 60  # seconds
@@ -34,6 +41,22 @@ app = FastAPI(title="DK/400", description="AS/400 Job Queue System")
 
 # Mount static files
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Start the job scheduler on application startup."""
+    logger.info("Starting DK/400 job scheduler...")
+    start_scheduler()
+    logger.info("DK/400 job scheduler started")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop the job scheduler on application shutdown."""
+    logger.info("Stopping DK/400 job scheduler...")
+    stop_scheduler()
+    logger.info("DK/400 job scheduler stopped")
 
 
 class RateLimiter:
@@ -92,6 +115,35 @@ async def index():
 async def health():
     """Health check endpoint."""
     return {"status": "ok", "service": "dk400-web", "timestamp": datetime.now().isoformat()}
+
+
+@app.get("/api/jobs")
+async def list_jobs():
+    """List all scheduled jobs."""
+    from src.dk400.web.job_scheduler import list_scheduled_jobs
+    return {"jobs": list_scheduled_jobs()}
+
+
+@app.get("/api/ntp")
+async def ntp_status():
+    """Get NTP sync status."""
+    from src.dk400.web.database import get_system_value
+    return {
+        "status": get_system_value('QNTPSTS', 'UNKNOWN'),
+        "local_time": get_system_value('QNTPTIME', ''),
+        "utc_time": get_system_value('QNTPUTC', ''),
+        "offset": get_system_value('QNTPOFFS', ''),
+        "server": get_system_value('QNTPSRV', ''),
+        "last_sync": get_system_value('QNTPLAST', '')
+    }
+
+
+@app.post("/api/ntp/sync")
+async def trigger_ntp_sync():
+    """Manually trigger NTP sync."""
+    from src.dk400.web.job_scheduler import run_job_now
+    result = await run_job_now('QNTPSYNC')
+    return result
 
 
 class ConnectionManager:

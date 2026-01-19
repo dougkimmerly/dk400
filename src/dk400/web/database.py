@@ -221,7 +221,13 @@ INSERT INTO qsys.qsysval (name, value, description, category) VALUES
     ('QTIMSEP', ':', 'Time separator character', 'DATETIME'),
     ('QDATSEP', '/', 'Date separator character', 'DATETIME'),
     ('QTIMZON', 'America/Toronto', 'System timezone (IANA format)', 'DATETIME'),
-    ('QDSTADJ', '*YES', 'Daylight saving time adjustment (*YES, *NO)', 'DATETIME')
+    ('QDSTADJ', '*YES', 'Daylight saving time adjustment (*YES, *NO)', 'DATETIME'),
+    ('QNTPTIME', '', 'Last NTP sync time (local)', 'NTP'),
+    ('QNTPUTC', '', 'Last NTP sync time (UTC)', 'NTP'),
+    ('QNTPOFFS', '', 'NTP time offset in seconds', 'NTP'),
+    ('QNTPSRV', '', 'NTP server used for last sync', 'NTP'),
+    ('QNTPSTS', 'PENDING', 'NTP sync status (OK, FAILED, PENDING)', 'NTP'),
+    ('QNTPLAST', '', 'Timestamp of last NTP sync attempt', 'NTP')
 ON CONFLICT (name) DO NOTHING;
 
 -- =============================================================================
