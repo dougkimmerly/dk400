@@ -73,6 +73,9 @@ from src.dk400.web.database import (
     get_cursor,
 )
 from psycopg2 import sql
+from src.dk400.web.active_sessions import (
+    get_active_sessions, update_session_user, update_session_activity
+)
 
 
 # Screen dimensions
@@ -881,6 +884,9 @@ class ScreenManager:
         user_profile = user_manager.get_user(user)
         session.user = user
         session.user_class = user_profile.user_class if user_profile else "*USER"
+
+        # Update active session registry with signed-on user
+        update_session_user(session.id, user)
 
         # Load library list settings
         session.library_list = get_user_library_list(user)
@@ -2534,8 +2540,22 @@ class ScreenManager:
     # ========== DATA HELPERS ==========
 
     def _get_celery_jobs(self) -> list[dict]:
-        """Get active Celery jobs."""
+        """Get active jobs including interactive sessions and Celery tasks."""
         jobs = []
+
+        # Add interactive terminal sessions first
+        for session in get_active_sessions():
+            jobs.append({
+                'name': session['name'],
+                'user': session['user'],
+                'type': session['type'],
+                'status': session['status'],
+                'cpu': session['cpu'],
+                'function': session['function'],
+                'task_id': session.get('session_id'),
+            })
+
+        # Add Celery batch jobs
         try:
             app = get_celery_app()
             inspect = app.control.inspect()
@@ -2570,16 +2590,16 @@ class ScreenManager:
         except Exception:
             pass
 
-        if not jobs:
-            jobs.append({
-                'name': 'QBATCH',
-                'user': 'QSYS',
-                'type': 'SBS',
-                'status': 'ACTIVE',
-                'cpu': '0.0',
-                'function': 'PGM-QBATCH',
-                'task_id': None,
-            })
+        # Always show subsystem even if no other jobs
+        jobs.append({
+            'name': 'QBATCH',
+            'user': 'QSYS',
+            'type': 'SBS',
+            'status': 'ACTIVE',
+            'cpu': '0.0',
+            'function': 'PGM-QBATCH',
+            'task_id': None,
+        })
 
         return jobs
 

@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.dk400.web.screens import ScreenManager, Session
 from src.dk400.web.job_scheduler import start_scheduler, stop_scheduler
+from src.dk400.web.active_sessions import register_session, unregister_session, update_session_activity
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +173,9 @@ class ConnectionManager:
         self.session_last_activity[session_id] = datetime.now()
         self.session_client_ips[session_id] = client_ip
 
+        # Register as interactive session (user will be updated after sign-on)
+        register_session(session_id, 'QSYSOPR', client_ip)
+
         return session_id, self.sessions[session_id]
 
     def touch_session(self, session_id: str):
@@ -192,6 +196,9 @@ class ConnectionManager:
 
     def disconnect(self, session_id: str):
         """Clean up session on disconnect."""
+        # Unregister from active sessions
+        unregister_session(session_id)
+
         if session_id in self.active_connections:
             del self.active_connections[session_id]
         if session_id in self.sessions:
