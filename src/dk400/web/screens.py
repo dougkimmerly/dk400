@@ -4612,7 +4612,7 @@ class ScreenManager:
             msg_count = q.get('total_count', 0)
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
-                {"type": "text", "text": f"  {q['name']:<10}  {q['queue_type']:<8}  {msg_count:>4}  {q['description'][:30]}"},
+                {"type": "text", "text": f"  {q['name']:<10}  {q.get('delivery', '*HOLD'):<8}  {msg_count:>4}  {q.get('description', '')[:30]}"},
             ]
             content.append(row)
             fields.append({"id": f"opt_{i}"})
