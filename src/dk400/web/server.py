@@ -13,9 +13,9 @@ from typing import Optional
 from pathlib import Path
 from collections import defaultdict
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException, Depends, Cookie
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.dk400.web.screens import ScreenManager, Session
@@ -105,6 +105,68 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_ATTEMPTS)
 
+# Session cookie name for API authentication
+SESSION_COOKIE_NAME = "dk400_session"
+
+
+def get_authenticated_session(dk400_session: Optional[str] = Cookie(None)) -> str:
+    """
+    Dependency that validates the session cookie.
+    Returns the username if authenticated, raises 401 if not.
+    """
+    if not dk400_session:
+        raise HTTPException(status_code=401, detail="Not authenticated - please sign in via terminal")
+
+    # Check if session exists and has an authenticated user
+    if dk400_session not in manager.sessions:
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    session = manager.sessions[dk400_session]
+    if not session.user or session.user == "":
+        raise HTTPException(status_code=401, detail="Not signed in")
+
+    return session.user
+
+
+@app.post("/api/auth/validate")
+async def validate_session(request: Request):
+    """
+    Validate a WebSocket session and set a cookie for API access.
+    Called by the terminal JavaScript after successful sign-on.
+    """
+    try:
+        data = await request.json()
+        session_id = data.get("session_id")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid request")
+
+    if not session_id or session_id not in manager.sessions:
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    session = manager.sessions[session_id]
+    if not session.user or session.user == "":
+        raise HTTPException(status_code=401, detail="Not signed in")
+
+    # Create response with session cookie
+    response = JSONResponse({"status": "ok", "user": session.user})
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=session_id,
+        httponly=True,
+        secure=True,  # HTTPS only
+        samesite="strict",
+        max_age=SESSION_TIMEOUT_MINUTES * 60
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+async def logout_session():
+    """Clear the session cookie."""
+    response = JSONResponse({"status": "ok"})
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return response
+
 
 @app.get("/")
 async def index():
@@ -119,15 +181,15 @@ async def health():
 
 
 @app.get("/api/jobs")
-async def list_jobs():
-    """List all scheduled jobs."""
+async def list_jobs(user: str = Depends(get_authenticated_session)):
+    """List all scheduled jobs. Requires authentication."""
     from src.dk400.web.job_scheduler import list_scheduled_jobs
-    return {"jobs": list_scheduled_jobs()}
+    return {"jobs": list_scheduled_jobs(), "user": user}
 
 
 @app.get("/api/ntp")
-async def ntp_status():
-    """Get NTP sync status."""
+async def ntp_status(user: str = Depends(get_authenticated_session)):
+    """Get NTP sync status. Requires authentication."""
     from src.dk400.web.database import get_system_value
     return {
         "status": get_system_value('QNTPSTS', 'UNKNOWN'),
@@ -135,14 +197,16 @@ async def ntp_status():
         "utc_time": get_system_value('QNTPUTC', ''),
         "offset": get_system_value('QNTPOFFS', ''),
         "server": get_system_value('QNTPSRV', ''),
-        "last_sync": get_system_value('QNTPLAST', '')
+        "last_sync": get_system_value('QNTPLAST', ''),
+        "user": user
     }
 
 
 @app.post("/api/ntp/sync")
-async def trigger_ntp_sync():
-    """Manually trigger NTP sync."""
+async def trigger_ntp_sync(user: str = Depends(get_authenticated_session)):
+    """Manually trigger NTP sync. Requires authentication."""
     from src.dk400.web.job_scheduler import run_job_now
+    logger.info(f"NTP sync triggered by user {user}")
     result = await run_job_now('QNTPSYNC')
     return result
 
@@ -254,8 +318,9 @@ async def websocket_endpoint(websocket: WebSocket):
             manager.touch_session(session_id)
 
             if action == "init":
-                # Send the sign-on screen
+                # Send the sign-on screen with session_id for auth
                 screen_data = screen_manager.get_screen(session, "signon")
+                screen_data["session_id"] = session_id
                 await websocket.send_json(screen_data)
 
             elif action == "submit":
@@ -276,6 +341,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     rate_limiter.record_attempt(client_ip)
 
                 result = screen_manager.handle_submit(session, screen, fields)
+                # Include session_id for auth validation after sign-on
+                if session.user and session.user != "":
+                    result["session_id"] = session_id
+                    result["authenticated"] = True
                 await websocket.send_json(result)
 
             elif action == "function_key":

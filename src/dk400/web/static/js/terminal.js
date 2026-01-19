@@ -13,6 +13,8 @@ class Terminal5250 {
         this.activeFieldIndex = 0;
         this.connected = false;
         this.sessionEnded = false;
+        this.sessionId = null;  // For API authentication
+        this.authenticated = false;
 
         // Screen dimensions
         this.cols = 80;
@@ -111,6 +113,17 @@ class Terminal5250 {
         // Hide busy indicator on any response
         this.hideBusy();
 
+        // Store session_id if provided
+        if (data.session_id) {
+            this.sessionId = data.session_id;
+        }
+
+        // Handle authentication - set cookie when user signs in
+        if (data.authenticated && !this.authenticated && this.sessionId) {
+            this.authenticated = true;
+            this.validateSession();
+        }
+
         switch (data.type) {
             case 'screen':
                 this.updateScreen(data);
@@ -124,6 +137,23 @@ class Terminal5250 {
             case 'bell':
                 this.bell();
                 break;
+        }
+    }
+
+    async validateSession() {
+        // Call the auth endpoint to set a session cookie for API access
+        try {
+            const response = await fetch('/api/auth/validate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: this.sessionId }),
+                credentials: 'same-origin'
+            });
+            if (!response.ok) {
+                console.warn('Session validation failed:', response.status);
+            }
+        } catch (e) {
+            console.warn('Session validation error:', e);
         }
     }
 
@@ -542,6 +572,11 @@ class Terminal5250 {
 
     exitSession() {
         this.sessionEnded = true;
+
+        // Clear auth state and cookie
+        this.authenticated = false;
+        this.sessionId = null;
+        fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
 
         // Close WebSocket
         if (this.ws) {
