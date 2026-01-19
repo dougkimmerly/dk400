@@ -7755,13 +7755,33 @@ class ScreenManager:
         for i, q in enumerate(page_queries):
             opt = fields.get(f'opt_{i}', '').strip()
             if opt == '1':
-                # Set the query name and library in wrkqry fields
-                session.field_values['wrkqry_query'] = q['name']
-                session.field_values['wrkqry_library'] = q['library']
                 # Remember library for next time
                 session.field_values['qry_last_library'] = q['library']
-                # Return to wrkqry
-                return self.get_screen(session, 'wrkqry')
+
+                # Load the full query definition
+                qry_def = get_query_definition(q['name'], q['library'])
+                if not qry_def:
+                    session.message = f"Query {q['name']} not found"
+                    session.message_level = "error"
+                    return self.get_screen(session, 'qrylist')
+
+                # Load query into session for editing (same as option 2 in wrkqry)
+                session.field_values['qry_mode'] = 'change'
+                session.field_values['qry_name'] = qry_def['name']
+                session.field_values['qry_library'] = qry_def['library']
+                session.field_values['qry_desc'] = qry_def.get('description', '')
+                session.field_values['qry_schema'] = qry_def.get('source_schema', '')
+                session.field_values['qry_table'] = qry_def.get('source_table', '')
+                session.field_values['qry_columns'] = qry_def.get('selected_columns', [])
+                session.field_values['qry_conditions'] = qry_def.get('where_conditions', [])
+                session.field_values['qry_orderby'] = qry_def.get('order_by_fields', [])
+                session.field_values['qry_summary'] = qry_def.get('summary_functions', [])
+                session.field_values['qry_groupby'] = qry_def.get('group_by_fields', [])
+                session.field_values['qry_output'] = qry_def.get('output_type', '*DISPLAY')
+                session.field_values['qry_limit'] = qry_def.get('row_limit', 0)
+
+                # Go directly to query definition screen
+                return self.get_screen(session, 'qrydefine')
 
         return self.get_screen(session, 'qrylist')
 
