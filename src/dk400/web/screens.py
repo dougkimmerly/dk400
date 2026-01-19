@@ -886,6 +886,9 @@ class ScreenManager:
         success, message = user_manager.authenticate(user, password)
 
         if not success:
+            # Log failed sign-on attempt (security audit)
+            log_event('SIGNON_FAIL', user, f"Failed sign-on attempt for user {user}: {message}",
+                      session.context.get('ip_address'))
             session.message = message
             session.message_level = "error"
             return self.get_screen(session, 'signon')
@@ -2849,7 +2852,7 @@ class ScreenManager:
             for entry in qhst_entries:
                 severity = 'INFO'
                 action = entry.get('action', '')
-                if action in ('ERROR', 'FAILED'):
+                if action in ('ERROR', 'FAILED', 'SIGNON_FAIL'):
                     severity = 'ERROR'
                 elif action in ('WARN', 'WARNING'):
                     severity = 'WARN'
