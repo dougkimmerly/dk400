@@ -16,7 +16,9 @@ RUN pip install --no-cache-dir \
     websockets \
     celery \
     redis \
-    psycopg2-binary
+    psycopg2-binary \
+    apscheduler \
+    ntplib
 
 # Copy source
 COPY src /app/src
