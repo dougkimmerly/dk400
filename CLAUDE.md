@@ -5,11 +5,11 @@ AS/400-inspired job queue system with green screen web TUI.
 ## Quick Deploy
 
 ```bash
-# Standard deploy
-ssh doug@192.168.20.19 "cd /home/doug/dkSRC/infrastructure/dk400 && git pull && docker compose up -d --build"
+# Standard deploy (via homelab-dk400 wrapper)
+ssh doug@192.168.20.19 "cd /home/doug/dkSRC/infrastructure/homelab-dk400 && git pull --recurse-submodules && docker compose up -d --build"
 
 # Force rebuild (cache issues)
-ssh doug@192.168.20.19 "cd /home/doug/dkSRC/infrastructure/dk400 && git pull && docker compose build --no-cache && docker compose up -d"
+ssh doug@192.168.20.19 "cd /home/doug/dkSRC/infrastructure/homelab-dk400 && git pull --recurse-submodules && docker compose build --no-cache && docker compose up -d"
 ```
 
 ## URLs
