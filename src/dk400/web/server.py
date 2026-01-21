@@ -17,6 +17,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPExcept
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import redis
 
 from src.dk400.web.screens import ScreenManager, Session
 from src.dk400.web.job_scheduler import start_scheduler, stop_scheduler
@@ -104,6 +105,30 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter(RATE_LIMIT_WINDOW, RATE_LIMIT_MAX_ATTEMPTS)
+
+# Redis client for reading health state (same DB as container_monitor task)
+REDIS_HOST = os.environ.get('REDIS_HOST', 'dk400-redis')
+health_redis = redis.Redis(host=REDIS_HOST, port=6379, db=1, decode_responses=True)
+
+# Monitored containers (mirrors tasks/health.py CONTAINER_HOSTS)
+MONITORED_SERVICES = {
+    'docker-server': [
+        'nginx-proxy-manager',
+        'portainer',
+        'homelab-dashboard',
+        'homelab-brain',
+        'dk400-web',
+        'dk400-postgres',
+        'dk400-qbatch',
+        'dk400-beat',
+    ],
+    'synology': [
+        'gluetun',
+        'radarr',
+        'sonarr',
+        'prowlarr',
+    ],
+}
 
 # Session cookie name for API authentication
 SESSION_COOKIE_NAME = "dk400_session"
@@ -209,6 +234,83 @@ async def trigger_ntp_sync(user: str = Depends(get_authenticated_session)):
     logger.info(f"NTP sync triggered by user {user}")
     result = await run_job_now('QNTPSYNC')
     return result
+
+
+@app.get("/api/health/services")
+async def health_services():
+    """
+    Get status of all monitored services.
+
+    This endpoint is used by the dashboard to display service health.
+    Returns status from the container_monitor task (runs every 2 minutes).
+
+    Status values:
+    - "ok": Container is running
+    - "down": Container is down (being tracked)
+    - "unknown": Unable to determine status
+    """
+    services = []
+
+    try:
+        for host, containers in MONITORED_SERVICES.items():
+            # Check SSH connectivity for this host
+            ssh_down = health_redis.get(f"container_down:{host}:ssh")
+            ssh_timeout = health_redis.get(f"container_down:{host}:ssh_timeout")
+
+            host_reachable = not (ssh_down or ssh_timeout)
+
+            for container in containers:
+                container_key = f"container_down:{host}:{container}"
+                down_state = health_redis.get(container_key)
+
+                if not host_reachable:
+                    status = "unknown"
+                    message = "Host unreachable"
+                elif down_state:
+                    status = "down"
+                    try:
+                        state_data = json.loads(down_state)
+                        first_seen = state_data.get('first_seen', '')
+                        message = f"Down since {first_seen}"
+                    except json.JSONDecodeError:
+                        message = "Down"
+                else:
+                    status = "ok"
+                    message = None
+
+                services.append({
+                    "host": host,
+                    "name": container,
+                    "status": status,
+                    "message": message,
+                })
+    except redis.ConnectionError as e:
+        logger.error(f"Redis connection error: {e}")
+        # Return unknown status for all services if Redis is down
+        for host, containers in MONITORED_SERVICES.items():
+            for container in containers:
+                services.append({
+                    "host": host,
+                    "name": container,
+                    "status": "unknown",
+                    "message": "Health check unavailable",
+                })
+
+    # Summary counts
+    ok_count = sum(1 for s in services if s["status"] == "ok")
+    down_count = sum(1 for s in services if s["status"] == "down")
+    unknown_count = sum(1 for s in services if s["status"] == "unknown")
+
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "summary": {
+            "total": len(services),
+            "ok": ok_count,
+            "down": down_count,
+            "unknown": unknown_count,
+        },
+        "services": services,
+    }
 
 
 class ConnectionManager:
