@@ -1,7 +1,12 @@
+# DK/400 - Complete AS/400-style System
+# All components as one unified "machine"
 name: dk400
 
 services:
-  postgres:
+  # ==========================================================================
+  # PostgreSQL Database (like AS/400 disk storage)
+  # ==========================================================================
+  dk400-postgres:
     image: postgres:16-alpine
     container_name: dk400-postgres
     restart: unless-stopped
@@ -20,7 +25,10 @@ services:
     networks:
       - dk400
 
-  redis:
+  # ==========================================================================
+  # Redis (like AS/400 job queues)
+  # ==========================================================================
+  dk400-redis:
     image: redis:7-alpine
     container_name: dk400-redis
     restart: unless-stopped
@@ -34,20 +42,23 @@ services:
     networks:
       - dk400
 
-  celery-qbatch:
+  # ==========================================================================
+  # Celery Worker (QBATCH subsystem)
+  # ==========================================================================
+  dk400-qbatch:
     build: .
-    container_name: celery-qbatch
+    container_name: dk400-qbatch
     command: celery -A src.dk400.celery_app worker --loglevel=info --concurrency=4 -n qbatch@%h
     restart: unless-stopped
     depends_on:
-      redis:
+      dk400-redis:
         condition: service_healthy
-      postgres:
+      dk400-postgres:
         condition: service_healthy
     environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
-      DK400_DB_HOST: postgres
+      CELERY_BROKER_URL: redis://dk400-redis:6379/0
+      CELERY_RESULT_BACKEND: redis://dk400-redis:6379/1
+      DK400_DB_HOST: dk400-postgres
       DK400_DB_PORT: 5432
       DK400_DB_NAME: dk400
       DK400_DB_USER: dk400
@@ -57,19 +68,22 @@ services:
     networks:
       - dk400
 
-  celery-beat:
+  # ==========================================================================
+  # Celery Beat Scheduler (QSCD - Job Scheduler)
+  # ==========================================================================
+  dk400-beat:
     build: .
-    container_name: celery-beat
+    container_name: dk400-beat
     command: celery -A src.dk400.celery_app beat --loglevel=info -s /app/data/celerybeat-schedule
     restart: unless-stopped
     depends_on:
-      redis:
+      dk400-redis:
         condition: service_healthy
-      postgres:
+      dk400-postgres:
         condition: service_healthy
     environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
-      DK400_DB_HOST: postgres
+      CELERY_BROKER_URL: redis://dk400-redis:6379/0
+      DK400_DB_HOST: dk400-postgres
       DK400_DB_PORT: 5432
       DK400_DB_NAME: dk400
       DK400_DB_USER: dk400
@@ -80,19 +94,25 @@ services:
     networks:
       - dk400
 
-  flower:
+  # ==========================================================================
+  # Flower (Job Monitoring - like WRKACTJOB)
+  # ==========================================================================
+  dk400-flower:
     image: mher/flower:2.0
     container_name: dk400-flower
-    command: celery --broker=redis://redis:6379/0 flower --port=5555
+    command: celery --broker=redis://dk400-redis:6379/0 flower --port=5555
     ports:
       - "5555:5555"
     depends_on:
-      - redis
+      - dk400-redis
     networks:
       - dk400
     restart: unless-stopped
 
-  web:
+  # ==========================================================================
+  # Web Terminal (5250 emulator - like interactive subsystem)
+  # ==========================================================================
+  dk400-web:
     build:
       context: .
       dockerfile: Dockerfile.web
@@ -101,8 +121,8 @@ services:
     ports:
       - "8400:8400"
     environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
-      DK400_DB_HOST: postgres
+      CELERY_BROKER_URL: redis://dk400-redis:6379/0
+      DK400_DB_HOST: dk400-postgres
       DK400_DB_PORT: 5432
       DK400_DB_NAME: dk400
       DK400_DB_USER: dk400
@@ -114,9 +134,9 @@ services:
     networks:
       - dk400
     depends_on:
-      redis:
+      dk400-redis:
         condition: service_healthy
-      postgres:
+      dk400-postgres:
         condition: service_healthy
 
 networks:
