@@ -6296,6 +6296,26 @@ class ScreenManager:
             "activeField": len(page_jobs),
         }
 
+    def _submit_wrkjobhst(self, session: Session, fields: dict) -> dict:
+        """Handle Work with Job History submission."""
+        # Handle command line
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        # Get paginated jobs
+        jobs = get_job_history(limit=100)
+        page_size = self.PAGE_SIZES['wrkjobhst']
+        offset = session.get_offset('wrkjobhst')
+        page_jobs = jobs[offset:offset + page_size]
+
+        for i, job in enumerate(page_jobs):
+            opt = fields.get(f'opt_{i}', '').strip()
+            if opt:
+                return self._handle_wrkjobhst_option(session, opt, i)
+
+        return self.get_screen(session, 'wrkjobhst')
+
     def _handle_wrkjobhst_option(self, session: Session, option: str, index: int) -> dict:
         """Handle option selection on WRKJOBHST."""
         job_id = session.context.get(f'jobhst_{index}')
