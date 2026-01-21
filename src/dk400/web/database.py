@@ -669,7 +669,7 @@ CREATE TABLE IF NOT EXISTS {lib}._jobscde (
     frequency VARCHAR(10) DEFAULT '*ONCE',
     schedule_date DATE,
     schedule_time TIME,
-    days_of_week VARCHAR(20) DEFAULT '',
+    days_of_week VARCHAR(50) DEFAULT '',
     status VARCHAR(10) DEFAULT '*ACTIVE',
     last_run TIMESTAMP,
     next_run TIMESTAMP,
