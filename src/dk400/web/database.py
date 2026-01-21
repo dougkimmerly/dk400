@@ -383,6 +383,17 @@ CREATE TABLE IF NOT EXISTS qsys._jrnpf (
 );
 
 -- =============================================================================
+-- VPN Rotation State (for arr stack gluetun rotation)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS qsys._vpnstate (
+    id INTEGER PRIMARY KEY DEFAULT 1,           -- Singleton row (id=1)
+    last_rotation TIMESTAMP,                    -- When VPN was last rotated
+    next_rotation TIMESTAMP,                    -- Scheduled next rotation
+    rotation_count INTEGER DEFAULT 0,           -- Total rotations performed
+    CONSTRAINT single_row CHECK (id = 1)
+);
+
+-- =============================================================================
 -- Default Libraries
 -- =============================================================================
 INSERT INTO qsys._lib (name, type, text, created_by) VALUES
