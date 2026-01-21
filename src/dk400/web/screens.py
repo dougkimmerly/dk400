@@ -41,6 +41,8 @@ from src.dk400.web.database import (
     add_job_schedule_entry, remove_job_schedule_entry, get_job_schedule_entry,
     list_job_schedule_entries, hold_job_schedule_entry, release_job_schedule_entry,
     change_job_schedule_entry,
+    # Job History
+    get_job_history, get_job_history_entry,
     # Authorization Lists
     create_authorization_list, delete_authorization_list, list_authorization_lists,
     add_authorization_list_entry, remove_authorization_list_entry,
@@ -279,6 +281,9 @@ class ScreenManager:
         'HLDJOBSCDE': 'hldjobscde',
         'RLSJOBSCDE': 'rlsjobscde',
         'RMVJOBSCDE': 'rmvjobscde',
+        # Job History
+        'DSPJOBLOG': 'dspjoblog',
+        'WRKJOBHST': 'wrkjobhst',
         # Authorization Lists
         'WRKAUTL': 'wrkautl',
         'DSPAUTL': 'dspautl',
@@ -367,6 +372,8 @@ class ScreenManager:
         'HLDJOBSCDE': 'Hold Job Schedule Entry',
         'RLSJOBSCDE': 'Release Job Schedule Entry',
         'RMVJOBSCDE': 'Remove Job Schedule Entry',
+        'DSPJOBLOG': 'Display Job Log',
+        'WRKJOBHST': 'Work with Job History',
         'WRKAUTL': 'Work with Authorization Lists',
         'DSPAUTL': 'Display Authorization List',
         'CRTAUTL': 'Create Authorization List',
@@ -748,6 +755,9 @@ class ScreenManager:
         'wrkjrn': 12,
         'dspjrn': 14,
         'wrkjrnrcv': 12,
+        # Job history screens
+        'wrkjobhst': 14,
+        'dspjoblog': 16,
     }
 
     def handle_roll(self, session: Session, screen: str, direction: str) -> dict:
@@ -6182,6 +6192,209 @@ class ScreenManager:
         if success:
             return self.get_screen(session, 'wrkjobscde')
         return self.get_screen(session, 'addjobscde')
+
+    # ========================================
+    # JOB HISTORY SCREENS
+    # ========================================
+
+    def _screen_wrkjobhst(self, session: Session) -> dict:
+        """Work with Job History - shows completed/failed jobs with output."""
+        hostname, date_str, time_str = get_system_info()
+        jobs = get_job_history(limit=100)
+
+        # Pagination
+        page_size = self.PAGE_SIZES['wrkjobhst']
+        offset = session.get_offset('wrkjobhst')
+        total = len(jobs)
+
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('wrkjobhst', offset)
+
+        page_jobs = jobs[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            pos_indicator = "Bottom" if offset + page_size >= total else "More..."
+        else:
+            pos_indicator = ""
+
+        content = [
+            pad_line(f" {hostname:<20}          Work with Job History (WRKJOBHST)           {session.user:>10}"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type options, press Enter."),
+            pad_line("   5=Display log"),
+            pad_line(""),
+            [{"type": "text", "text": pad_line(" Opt  Job Name                        Status     Started              Ended"), "class": "field-reverse"}],
+        ]
+
+        local_tz = get_system_timezone()
+        for i, job in enumerate(page_jobs):
+            job_name = (job.get('job_name', '') or '')[:30]
+            status = (job.get('status', '') or '')[:10]
+
+            # Format timestamps
+            started = job.get('started_at')
+            ended = job.get('completed_at')
+
+            if started:
+                if started.tzinfo is None:
+                    from zoneinfo import ZoneInfo
+                    started = started.replace(tzinfo=ZoneInfo('UTC'))
+                started_str = started.astimezone(local_tz).strftime('%Y-%m-%d %H:%M')
+            else:
+                started_str = ''
+
+            if ended:
+                if ended.tzinfo is None:
+                    from zoneinfo import ZoneInfo
+                    ended = ended.replace(tzinfo=ZoneInfo('UTC'))
+                ended_str = ended.astimezone(local_tz).strftime('%Y-%m-%d %H:%M')
+            else:
+                ended_str = ''
+
+            # Color code by status
+            css_class = ""
+            if status == 'ERROR':
+                css_class = "field-error"
+            elif status == 'COMPLETE':
+                css_class = ""
+            elif status == 'ACTIVE':
+                css_class = "field-warning"
+
+            line = f"       {job_name:<30}  {status:<10} {started_str:<16}     {ended_str:<16}"
+            content.append([
+                {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
+                {"type": "text", "text": line, "class": css_class},
+            ])
+
+            # Store job ID for option handling
+            session.context[f'jobhst_{i}'] = job.get('id')
+
+        while len(content) < 21:
+            content.append(pad_line(""))
+
+        content.append(pad_line(f"                                                                          {pos_indicator:>12}"))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel  PageDown/Up=Scroll"))
+
+        return {
+            "type": "screen",
+            "screen": "wrkjobhst",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": f"opt_{i}"} for i in range(len(page_jobs))] + [{"id": "cmd"}],
+            "activeField": len(page_jobs),
+        }
+
+    def _handle_wrkjobhst_option(self, session: Session, option: str, index: int) -> dict:
+        """Handle option selection on WRKJOBHST."""
+        job_id = session.context.get(f'jobhst_{index}')
+        if not job_id:
+            session.message = "Job not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkjobhst')
+
+        if option == '5':
+            # Display job log
+            session.field_values['selected_jobhst_id'] = job_id
+            return self.get_screen(session, 'dspjoblog')
+
+        session.message = f"Option {option} not valid"
+        session.message_level = "error"
+        return self.get_screen(session, 'wrkjobhst')
+
+    def _screen_dspjoblog(self, session: Session) -> dict:
+        """Display Job Log - shows detailed output/error from a job."""
+        hostname, date_str, time_str = get_system_info()
+        job_id = session.field_values.get('selected_jobhst_id')
+
+        if not job_id:
+            session.message = "No job selected"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkjobhst')
+
+        job = get_job_history_entry(job_id)
+        if not job:
+            session.message = f"Job {job_id} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkjobhst')
+
+        job_name = job.get('job_name', 'Unknown')
+        status = job.get('status', 'Unknown')
+        result = job.get('result', '')
+        error = job.get('error', '')
+
+        # Format timestamps
+        local_tz = get_system_timezone()
+        started = job.get('started_at')
+        ended = job.get('completed_at')
+
+        if started:
+            if started.tzinfo is None:
+                from zoneinfo import ZoneInfo
+                started = started.replace(tzinfo=ZoneInfo('UTC'))
+            started_str = started.astimezone(local_tz).strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            started_str = 'N/A'
+
+        if ended:
+            if ended.tzinfo is None:
+                from zoneinfo import ZoneInfo
+                ended = ended.replace(tzinfo=ZoneInfo('UTC'))
+            ended_str = ended.astimezone(local_tz).strftime('%Y-%m-%d %H:%M:%S')
+        else:
+            ended_str = 'N/A'
+
+        # Build display
+        content = [
+            pad_line(f" {hostname:<20}           Display Job Log (DSPJOBLOG)               {session.user:>10}", 132),
+            pad_line(f"                                                                                          {date_str}  {time_str}", 132),
+            pad_line("", 132),
+            pad_line(f" Job . . . . . . . . :   {job_name}", 132),
+            pad_line(f" Status  . . . . . . :   {status}", 132),
+            pad_line(f" Started . . . . . . :   {started_str}", 132),
+            pad_line(f" Ended . . . . . . . :   {ended_str}", 132),
+            pad_line("", 132),
+        ]
+
+        # Show result or error
+        if error:
+            content.append([{"type": "text", "text": pad_line(" Error Output:", 132), "class": "field-error"}])
+            content.append(pad_line("-" * 120, 132))
+            for line in error.split('\n')[:10]:  # Show first 10 lines
+                content.append([{"type": "text", "text": pad_line(f" {line[:128]}", 132), "class": "field-error"}])
+        elif result:
+            content.append([{"type": "text", "text": pad_line(" Job Output:", 132), "class": "field-reverse"}])
+            content.append(pad_line("-" * 120, 132))
+            for line in result.split('\n')[:10]:  # Show first 10 lines
+                content.append(pad_line(f" {line[:128]}", 132))
+        else:
+            content.append(pad_line(" No output recorded", 132))
+
+        while len(content) < 21:
+            content.append(pad_line("", 132))
+
+        content.append(pad_line("", 132))
+        content.append(fkey_line("F3=Exit  F12=Cancel", 132))
+
+        return {
+            "type": "screen",
+            "screen": "dspjoblog",
+            "cols": 132,
+            "content": content,
+            "fields": [],
+            "activeField": 0,
+        }
 
     # ========================================
     # AUTHORIZATION LIST SCREENS

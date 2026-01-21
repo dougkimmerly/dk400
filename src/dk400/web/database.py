@@ -3916,6 +3916,61 @@ def change_job_schedule_entry(name: str, **kwargs) -> tuple[bool, str]:
 
 
 # =============================================================================
+# Job History (AS/400-style JOBHST)
+# =============================================================================
+
+def get_job_history(limit: int = 100, status: str = None) -> list[dict]:
+    """Get job history entries, most recent first.
+
+    Args:
+        limit: Maximum number of entries to return
+        status: Filter by status (ACTIVE, COMPLETE, ERROR)
+
+    Returns:
+        List of job history entries
+    """
+    try:
+        with get_cursor() as cursor:
+            query = "SELECT * FROM qsys._jobhst WHERE 1=1"
+            params = []
+
+            if status:
+                query += " AND status = %s"
+                params.append(status.upper())
+
+            query += " ORDER BY started_at DESC LIMIT %s"
+            params.append(limit)
+
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Failed to get job history: {e}")
+        return []
+
+
+def get_job_history_entry(job_id: int) -> dict | None:
+    """Get a specific job history entry by ID.
+
+    Args:
+        job_id: The job history entry ID
+
+    Returns:
+        Job history entry dict or None if not found
+    """
+    try:
+        with get_cursor() as cursor:
+            cursor.execute(
+                "SELECT * FROM qsys._jobhst WHERE id = %s",
+                (job_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"Failed to get job history entry {job_id}: {e}")
+        return None
+
+
+# =============================================================================
 # Authorization Lists (AS/400-style AUTL)
 # =============================================================================
 
