@@ -2862,7 +2862,7 @@ class ScreenManager:
             for entry in qhst_entries:
                 severity = 'INFO'
                 action = entry.get('action', '')
-                if action in ('ERROR', 'FAILED', 'SIGNON_FAIL'):
+                if action in ('ERROR', 'FAILED', 'SIGNON_FAIL', 'JOBERROR'):
                     severity = 'ERROR'
                 elif action in ('WARN', 'WARNING'):
                     severity = 'WARN'
