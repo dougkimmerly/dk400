@@ -274,6 +274,11 @@ class ScreenManager:
         # Job Schedule Entries
         'WRKJOBSCDE': 'wrkjobscde',
         'ADDJOBSCDE': 'addjobscde',
+        'CHGJOBSCDE': 'chgjobscde',
+        'DSPJOBSCDE': 'dspjobscde',
+        'HLDJOBSCDE': 'hldjobscde',
+        'RLSJOBSCDE': 'rlsjobscde',
+        'RMVJOBSCDE': 'rmvjobscde',
         # Authorization Lists
         'WRKAUTL': 'wrkautl',
         'DSPAUTL': 'dspautl',
@@ -357,6 +362,11 @@ class ScreenManager:
         'DSPSPLF': 'Display Spooled File',
         'WRKJOBSCDE': 'Work with Job Schedule Entries',
         'ADDJOBSCDE': 'Add Job Schedule Entry',
+        'CHGJOBSCDE': 'Change Job Schedule Entry',
+        'DSPJOBSCDE': 'Display Job Schedule Entry',
+        'HLDJOBSCDE': 'Hold Job Schedule Entry',
+        'RLSJOBSCDE': 'Release Job Schedule Entry',
+        'RMVJOBSCDE': 'Remove Job Schedule Entry',
         'WRKAUTL': 'Work with Authorization Lists',
         'DSPAUTL': 'Display Authorization List',
         'CRTAUTL': 'Create Authorization List',
@@ -5597,27 +5607,62 @@ class ScreenManager:
     # ========================================
 
     def _screen_wrkjobscde(self, session: Session) -> dict:
-        """Work with Job Schedule Entries screen."""
+        """Work with Job Schedule Entries screen - AS/400 style."""
         hostname, date_str, time_str = get_system_info()
-        entries = list_job_schedule_entries()
+        all_entries = list_job_schedule_entries()
+
+        # Pagination
+        page_size = 10
+        offset = session.get_offset('wrkjobscde')
+        total = len(all_entries)
+
+        # Clamp offset to valid range
+        if offset >= total and total > 0:
+            offset = max(0, total - page_size)
+            session.set_offset('wrkjobscde', offset)
+
+        entries = all_entries[offset:offset + page_size]
+
+        # Position indicator
+        if total > page_size:
+            if offset + page_size >= total:
+                pos_indicator = "Bottom"
+            elif offset == 0:
+                pos_indicator = "More..."
+            else:
+                pos_indicator = "More..."
+        else:
+            pos_indicator = ""
 
         content = [
-            pad_line(f" {hostname:<20}       Work with Job Schedule Entries           {session.user:>10}"),
+            pad_line(f"                       Work with Job Schedule Entries"),
             pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(f" System:   {hostname}"),
             pad_line(""),
             pad_line(" Type options, press Enter."),
-            pad_line("   2=Display   4=Remove   8=Hold   9=Release"),
+            pad_line("   2=Change   4=Remove   5=Display   8=Hold   9=Release"),
             pad_line(""),
-            [{"type": "text", "text": pad_line(" Opt  Entry Name         Frequency  Time     Status     Next Run"), "class": "field-reverse"}],
+            # Two-line column header like real AS/400
+            [{"type": "text", "text": pad_line("      Job                                    Schedule  Schedule"), "class": "field-reverse"}],
+            [{"type": "text", "text": pad_line(" Opt  Name              Status     Frequency  Time      Description"), "class": "field-reverse"}],
         ]
 
         fields = []
         for i, e in enumerate(entries):
             sched_time = str(e.get('schedule_time', ''))[:5] if e.get('schedule_time') else ''
-            next_run = str(e.get('next_run', ''))[:16] if e.get('next_run') else ''
+            # Map status to AS/400 style: *ACTIVE -> SCHEDULED, *HELD -> HELD
+            raw_status = e.get('status', '')
+            if raw_status == '*ACTIVE':
+                status = 'SCHEDULED'
+            elif raw_status == '*HELD':
+                status = 'HELD'
+            else:
+                status = raw_status.replace('*', '')[:9]
+            freq = (e.get('frequency') or '').replace('*', '')[:9]
+            desc = (e.get('text') or '')[:17]
             row = [
                 {"type": "input", "id": f"opt_{i}", "width": 3, "class": "field-input"},
-                {"type": "text", "text": f"  {e['name']:<18} {e['frequency']:<10} {sched_time:<8} {e['status']:<10} {next_run}"},
+                {"type": "text", "text": f"  {e['name']:<16}  {status:<9}  {freq:<9}  {sched_time:<8}  {desc}"},
             ]
             content.append(row)
             fields.append({"id": f"opt_{i}"})
@@ -5625,7 +5670,8 @@ class ScreenManager:
         while len(content) < 19:
             content.append(pad_line(""))
 
-        content.append(pad_line("                                                                  Bottom"))
+        # Position/More indicator on the right
+        content.append(pad_line(f"                                                              {pos_indicator:>12}"))
 
         msg = session.message if session.message else ""
         content.append(pad_line(f" {msg}"))
@@ -5649,19 +5695,33 @@ class ScreenManager:
 
     def _submit_wrkjobscde(self, session: Session, fields: dict) -> dict:
         """Handle Work with Job Schedule Entries submission."""
-        entries = list_job_schedule_entries()
+        # Handle command line
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        # Get paginated entries
+        all_entries = list_job_schedule_entries()
+        page_size = 10
+        offset = session.get_offset('wrkjobscde')
+        entries = all_entries[offset:offset + page_size]
 
         for i, e in enumerate(entries):
             opt = fields.get(f'opt_{i}', '').strip()
             if opt:
                 entry_name = e['name']
                 if opt == '2':
+                    # Change - go to change screen (use display for now)
                     session.field_values['selected_jobscde'] = entry_name
-                    return self.get_screen(session, 'dspjobscde')
+                    return self.get_screen(session, 'chgjobscde')
                 elif opt == '4':
                     success, msg = remove_job_schedule_entry(entry_name)
                     session.message = msg
                     session.message_level = "info" if success else "error"
+                elif opt == '5':
+                    # Display details
+                    session.field_values['selected_jobscde'] = entry_name
+                    return self.get_screen(session, 'dspjobscde')
                 elif opt == '8':
                     success, msg = hold_job_schedule_entry(entry_name)
                     session.message = msg
@@ -5674,7 +5734,7 @@ class ScreenManager:
         return self.get_screen(session, 'wrkjobscde')
 
     def _screen_dspjobscde(self, session: Session) -> dict:
-        """Display Job Schedule Entry screen."""
+        """Display Job Schedule Entry screen - AS/400 style."""
         hostname, date_str, time_str = get_system_info()
         name = session.field_values.get('selected_jobscde', '')
         entry = get_job_schedule_entry(name)
@@ -5684,25 +5744,46 @@ class ScreenManager:
             session.message_level = "error"
             return self.get_screen(session, 'wrkjobscde')
 
+        # Format status for display
+        raw_status = entry.get('status', '')
+        if raw_status == '*ACTIVE':
+            status = 'SCHEDULED'
+        elif raw_status == '*HELD':
+            status = 'HELD'
+        else:
+            status = raw_status
+
+        # Format times
+        sched_time = str(entry.get('schedule_time', ''))[:8] if entry.get('schedule_time') else '*NONE'
+        last_run = str(entry.get('last_run', ''))[:19] if entry.get('last_run') else '*NONE'
+        next_run = str(entry.get('next_run', ''))[:19] if entry.get('next_run') else ''
+
+        # Format command (may be long)
+        command = entry.get('command', '')
+        cmd_line1 = command[:65] if command else ''
+        cmd_line2 = command[65:130] if len(command) > 65 else ''
+
         content = [
-            pad_line(f" {hostname:<20}       Display Job Schedule Entry               {session.user:>10}"),
+            pad_line(f"                       Display Job Schedule Entry"),
             pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(f" System:   {hostname}"),
             pad_line(""),
-            pad_line(f" Entry name . . . . :  {entry['name']}"),
-            pad_line(f" Description  . . . :  {entry.get('text', '')}"),
-            pad_line(f" Status . . . . . . :  {entry['status']}"),
+            pad_line(f" Job name . . . . . . . . . . . :   {entry['name']}"),
+            pad_line(f" Status . . . . . . . . . . . . :   {status}"),
             pad_line(""),
-            pad_line(" Schedule:"),
-            pad_line(f"   Frequency  . . . :  {entry['frequency']}"),
-            pad_line(f"   Time . . . . . . :  {entry.get('schedule_time') or ''}"),
-            pad_line(f"   Days . . . . . . :  {entry.get('days_of_week') or '*ALL'}"),
+            pad_line(f" Scheduled date . . . . . . . . :   {entry.get('schedule_date') or '*NONE'}"),
+            pad_line(f" Scheduled time . . . . . . . . :   {sched_time}"),
+            pad_line(f" Frequency  . . . . . . . . . . :   {entry.get('frequency', '')}"),
+            pad_line(f" Scheduled days . . . . . . . . :   {entry.get('days_of_week') or '*ALL'}"),
             pad_line(""),
-            pad_line(" Command:"),
-            pad_line(f"   {entry['command'][:60]}"),
+            pad_line(f" Text . . . . . . . . . . . . . :   {entry.get('text', '')}"),
             pad_line(""),
-            pad_line(f" Last run . . . . . :  {entry.get('last_run') or '*NONE'}"),
-            pad_line(f" Next run . . . . . :  {entry.get('next_run') or ''}"),
+            pad_line(f" Command to run:"),
+            pad_line(f"   {cmd_line1}"),
+            pad_line(f"   {cmd_line2}" if cmd_line2 else ""),
             pad_line(""),
+            pad_line(f" Last submitted . . . . . . . . :   {last_run}"),
+            pad_line(f" Next submit date . . . . . . . :   {next_run}"),
         ]
 
         while len(content) < 21:
@@ -5722,6 +5803,277 @@ class ScreenManager:
             "fields": [{"id": "cmd"}],
             "activeField": 0,
         }
+
+    def _screen_chgjobscde(self, session: Session) -> dict:
+        """Change Job Schedule Entry screen - AS/400 style."""
+        hostname, date_str, time_str = get_system_info()
+        name = session.field_values.get('selected_jobscde', '')
+        entry = get_job_schedule_entry(name)
+
+        if not entry:
+            session.message = f"Job schedule entry {name} not found"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkjobscde')
+
+        # Get current values for pre-fill
+        sched_time = str(entry.get('schedule_time', ''))[:5] if entry.get('schedule_time') else ''
+        freq = entry.get('frequency', '*DAILY')
+        days = entry.get('days_of_week', '')
+        text = entry.get('text', '')
+
+        content = [
+            pad_line(f"                       Change Job Schedule Entry (CHGJOBSCDE)"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type changes, press Enter."),
+            pad_line(""),
+            pad_line(f" Job name . . . . . . . . . . . :   {entry['name']}"),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Frequency  . . . . . . . . . . :   "},
+                {"type": "input", "id": "frequency", "width": 10, "value": freq, "class": "field-input"},
+                {"type": "text", "text": "  *ONCE, *DAILY, *WEEKLY..."},
+            ],
+            [
+                {"type": "text", "text": " Scheduled time . . . . . . . . :   "},
+                {"type": "input", "id": "schedule_time", "width": 5, "value": sched_time, "class": "field-input"},
+                {"type": "text", "text": "  HH:MM"},
+            ],
+            [
+                {"type": "text", "text": " Scheduled days . . . . . . . . :   "},
+                {"type": "input", "id": "days_of_week", "width": 30, "value": days, "class": "field-input"},
+            ],
+            pad_line("                                      MON,TUE,WED,THU,FRI,SAT,SUN"),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Text 'description' . . . . . . :   "},
+                {"type": "input", "id": "text", "width": 30, "value": text, "class": "field-input"},
+            ],
+            pad_line(""),
+        ]
+
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "chgjobscde",
+            "cols": 80,
+            "content": content,
+            "fields": [
+                {"id": "frequency"},
+                {"id": "schedule_time"},
+                {"id": "days_of_week"},
+                {"id": "text"},
+                {"id": "cmd"},
+            ],
+            "activeField": 0,
+        }
+
+    def _submit_chgjobscde(self, session: Session, fields: dict) -> dict:
+        """Handle Change Job Schedule Entry submission."""
+        cmd = fields.get('cmd', '').strip().upper()
+        if cmd:
+            return self.execute_command(session, cmd)
+
+        name = session.field_values.get('selected_jobscde', '')
+        if not name:
+            session.message = "No job schedule entry selected"
+            session.message_level = "error"
+            return self.get_screen(session, 'wrkjobscde')
+
+        # Gather changes
+        changes = {}
+        freq = fields.get('frequency', '').strip().upper()
+        if freq:
+            changes['frequency'] = freq if freq.startswith('*') else f'*{freq}'
+
+        sched_time = fields.get('schedule_time', '').strip()
+        if sched_time:
+            changes['schedule_time'] = sched_time
+
+        days = fields.get('days_of_week', '').strip().upper()
+        if days:
+            changes['days_of_week'] = days
+
+        text = fields.get('text', '').strip()
+        if text:
+            changes['text'] = text
+
+        if changes:
+            success, msg = change_job_schedule_entry(name, **changes)
+            session.message = msg
+            session.message_level = "info" if success else "error"
+            if success:
+                return self.get_screen(session, 'wrkjobscde')
+
+        return self.get_screen(session, 'chgjobscde')
+
+    def _screen_hldjobscde(self, session: Session) -> dict:
+        """Hold Job Schedule Entry - prompt for job name."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f"                       Hold Job Schedule Entry (HLDJOBSCDE)"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choice, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Job name . . . . . . . . . . . :   "},
+                {"type": "input", "id": "job_name", "width": 20, "class": "field-input"},
+            ],
+            pad_line(""),
+        ]
+
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "hldjobscde",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "job_name"}, {"id": "cmd"}],
+            "activeField": 0,
+        }
+
+    def _submit_hldjobscde(self, session: Session, fields: dict) -> dict:
+        """Handle Hold Job Schedule Entry submission."""
+        job_name = fields.get('job_name', '').strip().upper()
+        if not job_name:
+            session.message = "Job name required"
+            session.message_level = "error"
+            return self.get_screen(session, 'hldjobscde')
+
+        success, msg = hold_job_schedule_entry(job_name)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+        return self.get_screen(session, 'wrkjobscde')
+
+    def _screen_rlsjobscde(self, session: Session) -> dict:
+        """Release Job Schedule Entry - prompt for job name."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f"                       Release Job Schedule Entry (RLSJOBSCDE)"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choice, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Job name . . . . . . . . . . . :   "},
+                {"type": "input", "id": "job_name", "width": 20, "class": "field-input"},
+            ],
+            pad_line(""),
+        ]
+
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "rlsjobscde",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "job_name"}, {"id": "cmd"}],
+            "activeField": 0,
+        }
+
+    def _submit_rlsjobscde(self, session: Session, fields: dict) -> dict:
+        """Handle Release Job Schedule Entry submission."""
+        job_name = fields.get('job_name', '').strip().upper()
+        if not job_name:
+            session.message = "Job name required"
+            session.message_level = "error"
+            return self.get_screen(session, 'rlsjobscde')
+
+        success, msg = release_job_schedule_entry(job_name)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+        return self.get_screen(session, 'wrkjobscde')
+
+    def _screen_rmvjobscde(self, session: Session) -> dict:
+        """Remove Job Schedule Entry - prompt for job name."""
+        hostname, date_str, time_str = get_system_info()
+
+        content = [
+            pad_line(f"                       Remove Job Schedule Entry (RMVJOBSCDE)"),
+            pad_line(f"                                                          {date_str}  {time_str}"),
+            pad_line(""),
+            pad_line(" Type choice, press Enter."),
+            pad_line(""),
+            [
+                {"type": "text", "text": " Job name . . . . . . . . . . . :   "},
+                {"type": "input", "id": "job_name", "width": 20, "class": "field-input"},
+            ],
+            pad_line(""),
+        ]
+
+        while len(content) < 20:
+            content.append(pad_line(""))
+
+        msg = session.message if session.message else ""
+        content.append(pad_line(f" {msg}"))
+        session.message = ""
+
+        content.append([
+            {"type": "text", "text": " ===> "},
+            {"type": "input", "id": "cmd", "width": 66},
+        ])
+        content.append(fkey_line("F3=Exit  F12=Cancel"))
+
+        return {
+            "type": "screen",
+            "screen": "rmvjobscde",
+            "cols": 80,
+            "content": content,
+            "fields": [{"id": "job_name"}, {"id": "cmd"}],
+            "activeField": 0,
+        }
+
+    def _submit_rmvjobscde(self, session: Session, fields: dict) -> dict:
+        """Handle Remove Job Schedule Entry submission."""
+        job_name = fields.get('job_name', '').strip().upper()
+        if not job_name:
+            session.message = "Job name required"
+            session.message_level = "error"
+            return self.get_screen(session, 'rmvjobscde')
+
+        success, msg = remove_job_schedule_entry(job_name)
+        session.message = msg
+        session.message_level = "info" if success else "error"
+        return self.get_screen(session, 'wrkjobscde')
 
     def _screen_addjobscde(self, session: Session) -> dict:
         """Add Job Schedule Entry screen."""
