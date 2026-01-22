@@ -609,6 +609,12 @@ class ScreenManager:
             elif screen == 'wrklib':
                 # F6=Create on Work with Libraries
                 return self.get_screen(session, 'crtlib')
+            elif screen == 'dsplog':
+                # F6=Toggle between System Logs and Host Logs
+                current_mode = session.field_values.get('log_view_mode', 'system')
+                session.field_values['log_view_mode'] = 'host' if current_mode == 'system' else 'system'
+                session.set_offset('dsplog', 0)  # Reset pagination
+                return self.get_screen(session, 'dsplog')
         elif key == 'F7':
             # Screen-specific F7 handling
             if screen == 'wrkalr':
@@ -1760,7 +1766,17 @@ class ScreenManager:
     def _screen_dsplog(self, session: Session) -> dict:
         """Display Log - 132 columns for full log messages."""
         hostname, date_str, time_str = get_system_info()
-        all_logs = self._get_system_logs(limit=100)  # Get more logs for scrolling
+
+        # Check view mode - system logs or host logs
+        view_mode = session.field_values.get('log_view_mode', 'system')
+        if view_mode == 'host':
+            all_logs = self._get_host_logs(limit=100)
+            title = "Display Host Log (journald)"
+            toggle_key = "F6=System Logs"
+        else:
+            all_logs = self._get_system_logs(limit=100)
+            title = "Display Log"
+            toggle_key = "F6=Host Logs"
 
         # Pagination
         page_size = self.PAGE_SIZES['dsplog']
@@ -1780,7 +1796,7 @@ class ScreenManager:
             pos_indicator = ""
 
         content = [
-            pad_line(f" {hostname:<20}                          Display Log                                       {session.user:>10}", 132),
+            pad_line(f" {hostname:<20}              {title:<30}                         {session.user:>10}", 132),
             pad_line(f"                                                                                          {date_str}  {time_str}", 132),
             pad_line("", 132),
             [{"type": "text", "text": pad_line(" Time       Severity  Source       Message", 132), "class": "field-reverse"}],
@@ -1801,7 +1817,7 @@ class ScreenManager:
 
         content.append(pad_line(f"                                                                                                    {pos_indicator:>12}", 132))
         content.append(pad_line("", 132))
-        content.append(fkey_line("F3=Exit  F5=Refresh  F12=Cancel  PageDown=Roll Down  PageUp=Roll Up", 132))
+        content.append(fkey_line(f"F3=Exit  F5=Refresh  {toggle_key}  F12=Cancel  PageDown  PageUp", 132))
 
         return {
             "type": "screen",
@@ -2937,6 +2953,97 @@ class ScreenManager:
                 'severity': 'INFO',
                 'source': 'QSYSOPR',
                 'message': 'No log entries found',
+            })
+
+        return logs[:limit]
+
+    def _get_host_logs(self, limit: int = 50) -> list[dict]:
+        """Get host system logs from journald via SSH."""
+        logs = []
+
+        try:
+            # SSH to host and get journald logs for dk400-* containers
+            result = subprocess.run(
+                ['ssh', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=no',
+                 'doug@192.168.20.19',
+                 f'journalctl -t "dk400-postgres" -t "dk400-web" -t "dk400-qbatch" '
+                 f'-t "dk400-beat" -t "dk400-flower" -t "dk400-redis" '
+                 f'--since "1 hour ago" -n {limit} --no-pager '
+                 f'-o json'],
+                capture_output=True, text=True, timeout=15
+            )
+
+            if result.returncode == 0 and result.stdout:
+                import json
+                for line in result.stdout.strip().split('\n'):
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        # Parse journald JSON format
+                        timestamp_us = int(entry.get('__REALTIME_TIMESTAMP', 0))
+                        timestamp = datetime.fromtimestamp(timestamp_us / 1_000_000)
+                        time_str = timestamp.strftime('%H:%M:%S')
+
+                        message = entry.get('MESSAGE', '')
+                        container = entry.get('SYSLOG_IDENTIFIER', 'dk400')
+                        # Shorten container name (remove dk400- prefix)
+                        source = container.replace('dk400-', '').upper()[:10]
+
+                        # Determine severity
+                        priority = int(entry.get('PRIORITY', 6))
+                        if priority <= 3:  # error, crit, alert, emerg
+                            severity = 'ERROR'
+                        elif priority <= 4:  # warning
+                            severity = 'WARN'
+                        else:
+                            severity = 'INFO'
+
+                        # Also check message content for severity hints
+                        msg_upper = message.upper()
+                        if 'ERROR' in msg_upper or 'EXCEPTION' in msg_upper or 'FAILED' in msg_upper:
+                            severity = 'ERROR'
+                        elif 'WARN' in msg_upper:
+                            severity = 'WARN'
+
+                        logs.append({
+                            'time': time_str,
+                            'severity': severity,
+                            'source': source,
+                            'message': message[:90] if message else '',
+                            'timestamp': timestamp,
+                        })
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+            # Sort by timestamp descending (newest first)
+            logs.sort(key=lambda x: x.get('timestamp') or datetime.min, reverse=True)
+
+            # Remove timestamp key
+            for log in logs:
+                log.pop('timestamp', None)
+
+        except subprocess.TimeoutExpired:
+            logs.append({
+                'time': datetime.now().strftime('%H:%M:%S'),
+                'severity': 'ERROR',
+                'source': 'JOURNALD',
+                'message': 'SSH timeout connecting to host',
+            })
+        except Exception as e:
+            logs.append({
+                'time': datetime.now().strftime('%H:%M:%S'),
+                'severity': 'ERROR',
+                'source': 'JOURNALD',
+                'message': f'Failed to get host logs: {str(e)[:70]}',
+            })
+
+        if not logs:
+            logs.append({
+                'time': datetime.now().strftime('%H:%M:%S'),
+                'severity': 'INFO',
+                'source': 'JOURNALD',
+                'message': 'No host log entries found in the last hour',
             })
 
         return logs[:limit]
