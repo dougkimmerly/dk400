@@ -2960,6 +2960,11 @@ class ScreenManager:
     def _get_host_logs(self, limit: int = 50) -> list[dict]:
         """Get host system logs from journald via SSH."""
         logs = []
+        local_tz = get_system_timezone()
+
+        def local_time_str():
+            """Get current time in local timezone."""
+            return datetime.now(local_tz).strftime('%H:%M:%S')
 
         try:
             # SSH to host and get journald logs for dk400-* containers
@@ -2975,15 +2980,18 @@ class ScreenManager:
 
             if result.returncode == 0 and result.stdout:
                 import json
+                from zoneinfo import ZoneInfo
                 for line in result.stdout.strip().split('\n'):
                     if not line.strip():
                         continue
                     try:
                         entry = json.loads(line)
-                        # Parse journald JSON format
+                        # Parse journald JSON format - timestamp is in microseconds UTC
                         timestamp_us = int(entry.get('__REALTIME_TIMESTAMP', 0))
-                        timestamp = datetime.fromtimestamp(timestamp_us / 1_000_000)
-                        time_str = timestamp.strftime('%H:%M:%S')
+                        # Create UTC timestamp then convert to local
+                        utc_timestamp = datetime.fromtimestamp(timestamp_us / 1_000_000, tz=ZoneInfo('UTC'))
+                        local_timestamp = utc_timestamp.astimezone(local_tz)
+                        time_str = local_timestamp.strftime('%H:%M:%S')
 
                         message = entry.get('MESSAGE', '')
                         container = entry.get('SYSLOG_IDENTIFIER', 'dk400')
@@ -3011,7 +3019,7 @@ class ScreenManager:
                             'severity': severity,
                             'source': source,
                             'message': message[:90] if message else '',
-                            'timestamp': timestamp,
+                            'timestamp': local_timestamp,
                         })
                     except (json.JSONDecodeError, ValueError):
                         continue
@@ -3025,14 +3033,14 @@ class ScreenManager:
 
         except subprocess.TimeoutExpired:
             logs.append({
-                'time': datetime.now().strftime('%H:%M:%S'),
+                'time': local_time_str(),
                 'severity': 'ERROR',
                 'source': 'JOURNALD',
                 'message': 'SSH timeout connecting to host',
             })
         except Exception as e:
             logs.append({
-                'time': datetime.now().strftime('%H:%M:%S'),
+                'time': local_time_str(),
                 'severity': 'ERROR',
                 'source': 'JOURNALD',
                 'message': f'Failed to get host logs: {str(e)[:70]}',
@@ -3040,7 +3048,7 @@ class ScreenManager:
 
         if not logs:
             logs.append({
-                'time': datetime.now().strftime('%H:%M:%S'),
+                'time': local_time_str(),
                 'severity': 'INFO',
                 'source': 'JOURNALD',
                 'message': 'No host log entries found in the last hour',
