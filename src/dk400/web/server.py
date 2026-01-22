@@ -22,6 +22,7 @@ import redis
 from src.dk400.web.screens import ScreenManager, Session
 from src.dk400.web.job_scheduler import start_scheduler, stop_scheduler
 from src.dk400.web.active_sessions import register_session, unregister_session, update_session_activity
+from src.dk400.web.database import get_latest_health_results, get_health_summary, get_last_health_run
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +311,30 @@ async def health_services():
             "unknown": unknown_count,
         },
         "services": services,
+    }
+
+
+@app.get("/api/healthchecks/results")
+async def healthcheck_results():
+    """
+    Get comprehensive health check results for all monitored services.
+
+    This endpoint returns results from the full health check system that checks
+    all 69 services configured in Dashboard (HTTP, Docker, ping checks).
+
+    Returns:
+    - checks: List of all service check results with status, response time, errors
+    - summary: Count of services by status (up/down/unknown)
+    - last_run: Timestamp of most recent health check run
+    """
+    checks = get_latest_health_results()
+    summary = get_health_summary()
+    last_run = get_last_health_run()
+
+    return {
+        "checks": checks,
+        "summary": summary,
+        "last_run": last_run.isoformat() if last_run else None,
     }
 
 

@@ -394,6 +394,24 @@ CREATE TABLE IF NOT EXISTS qsys._vpnstate (
 );
 
 -- =============================================================================
+-- Health Check Results (comprehensive service monitoring)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS qsys._healthchk (
+    id SERIAL PRIMARY KEY,
+    service_name VARCHAR(255) NOT NULL,
+    check_type VARCHAR(50),                     -- http, docker, ping, external
+    status VARCHAR(20),                         -- up, down, unknown
+    response_time_ms INTEGER,                   -- Response time in milliseconds
+    status_code INTEGER,                        -- HTTP status code if applicable
+    error_message TEXT,                         -- Error details if failed
+    checked_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_healthchk_service ON qsys._healthchk(service_name);
+CREATE INDEX IF NOT EXISTS idx_healthchk_checked ON qsys._healthchk(checked_at);
+CREATE INDEX IF NOT EXISTS idx_healthchk_status ON qsys._healthchk(status);
+
+-- =============================================================================
 -- Default Libraries
 -- =============================================================================
 INSERT INTO qsys._lib (name, type, text, created_by) VALUES
@@ -6094,3 +6112,108 @@ def count_journal_entries(journal: str = None, library: str = None,
     except Exception as e:
         logger.error(f"Failed to count journal entries: {e}")
     return 0
+
+
+# =============================================================================
+# Health Check Results
+# =============================================================================
+
+def store_health_result(service_name: str, check_type: str, status: str,
+                        response_time_ms: int = None, status_code: int = None,
+                        error_message: str = None) -> bool:
+    """Store a health check result."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO qsys._healthchk
+                (service_name, check_type, status, response_time_ms, status_code, error_message)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (service_name, check_type, status, response_time_ms, status_code, error_message))
+            return True
+    except Exception as e:
+        logger.error(f"Failed to store health result for {service_name}: {e}")
+        return False
+
+
+def get_latest_health_results() -> list[dict]:
+    """Get the most recent health check result for each service."""
+    results = []
+    try:
+        with get_cursor() as cursor:
+            # Use DISTINCT ON to get only the latest result per service
+            cursor.execute("""
+                SELECT DISTINCT ON (service_name)
+                    service_name, check_type, status, response_time_ms,
+                    status_code, error_message, checked_at
+                FROM qsys._healthchk
+                ORDER BY service_name, checked_at DESC
+            """)
+            for row in cursor.fetchall():
+                results.append({
+                    'check_name': row['service_name'],
+                    'check_type': row['check_type'],
+                    'status': row['status'],
+                    'response_time_ms': row['response_time_ms'],
+                    'status_code': row['status_code'],
+                    'error': row['error_message'],
+                    'last_checked': row['checked_at'].isoformat() if row['checked_at'] else None,
+                })
+    except Exception as e:
+        logger.error(f"Failed to get health results: {e}")
+    return results
+
+
+def get_health_summary() -> dict:
+    """Get summary counts of health check statuses."""
+    summary = {'total': 0, 'up': 0, 'down': 0, 'unknown': 0}
+    try:
+        with get_cursor() as cursor:
+            # Count distinct services by their latest status
+            cursor.execute("""
+                SELECT status, COUNT(*) as cnt FROM (
+                    SELECT DISTINCT ON (service_name) service_name, status
+                    FROM qsys._healthchk
+                    ORDER BY service_name, checked_at DESC
+                ) latest
+                GROUP BY status
+            """)
+            for row in cursor.fetchall():
+                status = row['status']
+                cnt = row['cnt']
+                summary['total'] += cnt
+                if status == 'up':
+                    summary['up'] = cnt
+                elif status == 'down':
+                    summary['down'] = cnt
+                else:
+                    summary['unknown'] = cnt
+    except Exception as e:
+        logger.error(f"Failed to get health summary: {e}")
+    return summary
+
+
+def get_last_health_run() -> Optional[datetime]:
+    """Get timestamp of the most recent health check run."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("SELECT MAX(checked_at) as last_run FROM qsys._healthchk")
+            row = cursor.fetchone()
+            if row and row['last_run']:
+                return row['last_run']
+    except Exception as e:
+        logger.error(f"Failed to get last health run: {e}")
+    return None
+
+
+def cleanup_old_health_results(keep_hours: int = 24) -> int:
+    """Delete health check results older than keep_hours. Returns count deleted."""
+    try:
+        with get_cursor() as cursor:
+            cursor.execute("""
+                DELETE FROM qsys._healthchk
+                WHERE checked_at < NOW() - INTERVAL '%s hours'
+            """, (keep_hours,))
+            return cursor.rowcount
+    except Exception as e:
+        logger.error(f"Failed to cleanup old health results: {e}")
+        return 0
