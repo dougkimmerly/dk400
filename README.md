@@ -1,162 +1,137 @@
 # DK/400
 
-AS/400-inspired job queue system with web-based 5250 terminal emulator.
+An AS/400-inspired job queue and scheduling system with a web-based 5250 terminal emulator.
 
-```
-  ____  _  ______ ___   ___   ___
- |  _ \| |/ / / // _ \ / _ \ / _ \
- | | | | ' / / /| | | | | | | | | |
- | |_| | . \/ /_| |_| | |_| | |_| |
- |____/|_|\_\____\___/ \___/ \___/
-```
+## What It Does
 
-## Overview
+DK/400 provides three things:
 
-DK/400 brings the reliability and simplicity of AS/400-style job management to modern infrastructure:
+1. **Robot** — A Celery-based job scheduler that reads schedules from a database table (`qsys._jobscde`) and runs programs on schedule
+2. **API** — A FastAPI endpoint that lets external systems call programs via HTTP
+3. **Web Terminal** — A 5250-style terminal emulator in the browser, complete with green phosphor text, function keys, and AS/400-style screens
 
-- **Celery** - Distributed task queue (jobs never lost)
-- **Redis** - Fast, reliable message broker
-- **PostgreSQL** - System database with AS/400-style schemas
-- **Web Terminal** - Browser-based 5250 green screen emulator
-- **Flower** - Web-based job monitoring
+Programs are Python modules with a `run()` function. DK/400 schedules them, runs them, and provides a UI to manage them.
 
 ## Quick Start
 
 ```bash
-# Clone the repo
 git clone https://github.com/dougkimmerly/dk400.git
 cd dk400
-
-# Start all containers
-docker compose up -d
-
-# Check status
-docker compose ps
-
-# Access Web Terminal (5250 emulator)
-open http://localhost:8400
-
-# Access Flower UI (job monitoring)
-open http://localhost:5555
-
-# Default login: QSECOFR / QSECOFR
+docker compose up
 ```
+
+This starts dk400 + Redis. You'll need a PostgreSQL database — either add one to compose.yaml or point `DATABASE_URL` at an existing one.
+
+**Ports:**
+- `8400` — API (`/health`, `/pgm/{name}`)
+- `8500` — Web terminal
+
+## Writing Programs
+
+A program is a Python module with a `run()` function. Put it in `programs/`:
+
+```python
+# programs/hello.py
+
+async def run(**kwargs):
+    """Say hello."""
+    name = kwargs.get("name", "world")
+    return {"message": f"Hello, {name}!"}
+```
+
+**Call it via API:**
+```bash
+curl -X POST http://localhost:8400/pgm/hello \
+  -H "Content-Type: application/json" \
+  -d '{"kwargs": {"name": "Doug"}}'
+```
+
+**Schedule it** by adding a row to `qsys._jobscde`:
+```sql
+INSERT INTO qsys._jobscde (name, text, command, frequency, status)
+VALUES ('HELLO', 'Say hello every hour', 'hello', '*HOURLY', '*ACTIVE');
+```
+
+## Program Search Order
+
+DK/400 searches for programs in this order:
+
+1. `programs.*` — Your deployment-specific programs
+2. `dk400.programs.*` — Built-in platform programs
+
+This means deployment programs override built-ins with the same name.
+
+## Scheduling
+
+Jobs are defined in the `qsys._jobscde` table. The Robot scheduler reads this table every 60 seconds and picks up changes without a restart.
+
+| Column | Purpose |
+|--------|---------|
+| `name` | Job identifier |
+| `text` | Description |
+| `command` | Program name (e.g., `hello`) |
+| `frequency` | `*HOURLY`, `*DAILY`, `*WEEKLY`, `*MONTHLY`, or seconds |
+| `schedule_time` | Time to run (for daily/weekly/monthly) |
+| `days_of_week` | Days to run (for weekly) |
+| `status` | `*ACTIVE` or `*HELD` |
+
+**Command with kwargs:** `program_name|key=value,key2=value2`
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                           DK/400                                 │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐   │
-│  │  celery-  │  │  celery-  │  │  dk400-   │  │  dk400-   │   │
-│  │  qbatch   │  │   beat    │  │  flower   │  │   web     │   │
-│  │ (worker)  │  │(scheduler)│  │ (monitor) │  │(terminal) │   │
-│  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘   │
-│        └──────────────┼──────────────┼──────────────┘         │
-│                       │              │                         │
-│                 ┌─────▼─────┐  ┌─────▼─────┐                  │
-│                 │  dk400-   │  │  dk400-   │                  │
-│                 │   redis   │  │ postgres  │                  │
-│                 │  (queue)  │  │  (data)   │                  │
-│                 └───────────┘  └───────────┘                  │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────┐
+│                  DK/400                       │
+├──────────────────────────────────────────────┤
+│  supervisord                                  │
+│  ├── Robot (Celery Beat + Worker)             │
+│  │   └── reads qsys._jobscde → runs programs │
+│  ├── API (FastAPI :8400)                      │
+│  │   └── POST /pgm/{name} → runs programs    │
+│  └── Web (FastAPI :8500)                      │
+│      └── 5250 terminal via WebSocket          │
+├──────────────────────────────────────────────┤
+│  programs/         Your programs              │
+│  dk400/programs/   Built-in programs          │
+└──────────────────────────────────────────────┘
+         │                    │
+         ▼                    ▼
+    PostgreSQL             Redis
+    (qsys schema)       (Celery broker)
 ```
 
-## Containers
+## Using as a Submodule
 
-| Container | Port | Purpose |
-|-----------|------|---------|
-| dk400-web | 8400 | Web-based 5250 terminal emulator |
-| dk400-flower | 5555 | Celery job monitoring |
-| dk400-redis | 6379 | Job queue broker |
-| dk400-postgres | 5432 | System database |
-| celery-qbatch | - | Batch job worker (QBATCH) |
-| celery-beat | - | Job scheduler |
-
-## AS/400 Commands
-
-The web terminal supports 37+ AS/400-style commands:
-
-| Command | Description |
-|---------|-------------|
-| WRKACTJOB | Work with active jobs |
-| WRKJOBQ | Work with job queues |
-| WRKJOBSCDE | Work with job schedule entries |
-| WRKSVC | Work with services |
-| WRKHLTH | Work with health checks |
-| DSPSYSSTS | Display system status |
-| DSPLOG | Display system log |
-| SBMJOB | Submit job |
-| WRKUSRPRF | Work with user profiles |
-| WRKMSGQ | Work with message queues |
-| WRKQRY | Work with queries (SQL browser) |
-| WRKLIB | Work with libraries |
-| WRKSYSVAL | Work with system values |
-| WRKOUTQ | Work with output queues |
-| GO MENU | Display command menus |
-
-## Test Tasks
+DK/400 is designed to be consumed as a git submodule by deployment repos:
 
 ```bash
-# Ping test
-docker exec celery-qbatch celery -A src.dk400.celery_app call dk400.ping
+# In your deployment repo
+git submodule add https://github.com/dougkimmerly/dk400.git engine
 
-# Echo test
-docker exec celery-qbatch celery -A src.dk400.celery_app call dk400.echo --args='["Hello DK/400"]'
-
-# Delay test (5 seconds)
-docker exec celery-qbatch celery -A src.dk400.celery_app call dk400.delay --args='[5]'
+# Your repo structure:
+# my-deployment/
+# ├── engine/          ← dk400 submodule
+# ├── programs/        ← your programs
+# ├── Dockerfile       ← extends engine
+# ├── compose.yaml     ← your config
+# └── requirements.txt ← additional deps
 ```
 
-## Adding Your Own Tasks
+Your Dockerfile builds from the engine and adds your programs + extra dependencies.
 
-1. Create a new file in `src/dk400/tasks/`:
+## Configuration
 
-```python
-from src.dk400.celery_app import app
+All configuration via environment variables:
 
-@app.task(name='dk400.mytask')
-def my_task(param: str):
-    """Your custom task."""
-    return {'status': 'ok', 'result': param}
-```
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DATABASE_URL` | `postgresql://dk400:dk400@localhost:5432/dk400` | PostgreSQL connection |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis for Celery |
+| `API_PORT` | `8400` | API listen port |
+| `LOG_LEVEL` | `INFO` | Logging level |
+| `TZ` | `America/New_York` | Timezone |
 
-2. Add scheduled jobs in `src/dk400/celery_app.py`:
-
-```python
-from celery.schedules import crontab
-
-app.conf.beat_schedule = {
-    'my-daily-job': {
-        'task': 'dk400.mytask',
-        'schedule': crontab(hour=8, minute=0),
-        'args': ('morning run',),
-    },
-}
-```
-
-3. Restart containers:
-
-```bash
-docker compose restart celery-qbatch celery-beat
-```
-
-## Database
-
-DK/400 uses PostgreSQL with AS/400-style library (schema) organization:
-
-- `qsys` - System library (users, jobs, messages, system values)
-- `qgpl` - General purpose library
-- User-created libraries map to PostgreSQL schemas
-
-```sql
--- Example: Query users
-SELECT * FROM qsys.users;
-
--- Example: Query job schedule
-SELECT * FROM qsys.job_schedule;
-```
+Programs read their own env vars — the platform doesn't need to know about them.
 
 ## License
 

@@ -1,179 +1,60 @@
-# DK/400
+# dk400
 
-AS/400-inspired job queue system with green screen web TUI.
+AS/400-inspired job queue and scheduling system. This is the **platform** repo — reusable engine that deployments consume.
 
-## Quick Deploy
+## Architecture
 
-```bash
-# Standard deploy (via homelab-dk400 wrapper)
-ssh doug@192.168.20.19 "cd /home/doug/dkSRC/infrastructure/homelab-dk400 && git pull --recurse-submodules && docker compose up -d --build"
+Three processes run via supervisord:
+- **Robot** (Celery Beat + Worker) — reads `qsys._jobscde`, runs programs on schedule
+- **API** (FastAPI :8400) — HTTP endpoint to call programs
+- **Web** (FastAPI :8500) — 5250 terminal emulator via WebSocket
 
-# Force rebuild (cache issues)
-ssh doug@192.168.20.19 "cd /home/doug/dkSRC/infrastructure/homelab-dk400 && git pull --recurse-submodules && docker compose build --no-cache && docker compose up -d"
-```
+## Key Directories
 
-## URLs
+| Path | Purpose |
+|------|---------|
+| `dk400/` | Python package (platform code) |
+| `dk400/config/` | Settings (DATABASE_URL, REDIS_URL, API_PORT, LOG_LEVEL only) |
+| `dk400/db/` | Database connection management |
+| `dk400/robot/` | Celery worker, tasks, database scheduler |
+| `dk400/api/` | FastAPI API server |
+| `dk400/web/` | 5250 terminal (server, screens, database, users, static files) |
+| `dk400/programs/` | Built-in platform programs |
+| `programs/` | User/deployment programs (searched first) |
 
-- **Web UI:** http://192.168.20.19:8400
-- **Flower:** http://192.168.20.19:5555
+## Program Loading
 
-## Key Files
+Programs are searched in order:
+1. `programs.*` — deployment-specific (override)
+2. `dk400.programs.*` — built-in platform
 
-| File | Purpose | Lines |
-|------|---------|-------|
-| `src/dk400/web/screens.py` | ALL screen definitions | ~8500 |
-| `src/dk400/web/database.py` | ALL database functions | ~4300 |
-| `src/dk400/web/users.py` | User auth | ~430 |
-| `src/dk400/web/main.py` | FastAPI + WebSocket | ~200 |
+This happens in three places:
+- `dk400/robot/tasks.py` — `_import_program()`
+- `dk400/api/main.py` — `_import_program()`
+- `dk400/web/server.py` — inline in `run_program()`
 
 ## Database
 
-**Schema:** All system tables in `qsys` PostgreSQL schema.
+Uses PostgreSQL with `qsys` schema for system tables:
+- `qsys._jobscde` — job schedule definitions
+- `qsys.qausrprf` — user profiles
+- `qsys._jobhst` — job history
 
-```sql
--- ALWAYS use qsys prefix
-SELECT * FROM qsys.users;
-INSERT INTO qsys.system_values ...
+## Design Principles
+
+- **Platform knows nothing about deployments.** No homelab, NetBox, Telegram, or deployment-specific settings in this repo.
+- **Programs are the extension point.** All business logic lives in programs.
+- **Settings are minimal.** Platform only needs DATABASE_URL, REDIS_URL, API_PORT, LOG_LEVEL. Programs read their own env vars.
+- **Dual namespace loading.** `programs.*` first, then `dk400.programs.*`. Deployments override built-ins.
+
+## Deployment Pattern
+
+Deployments use this repo as a git submodule at `engine/`:
 ```
-
-**Library = PostgreSQL Schema:**
-- QSYS → qsys (system)
-- QGPL → qgpl (general purpose)
-- User libraries → user schemas
-
-## Common Gotchas
-
-### psycopg2 % in LIKE
-```python
-# WRONG: % interpreted as placeholder
-"NOT LIKE '\\_%'"
-
-# RIGHT: escape % as %%
-"NOT LIKE '\\_%%'"
+my-deployment/
+├── engine/          ← this repo (submodule)
+├── programs/        ← deployment programs
+├── Dockerfile       ← extends engine image
+├── compose.yaml     ← deployment config
+└── requirements.txt ← extra deps
 ```
-
-### list_table_columns keys
-Uses `name`, `max_length`, `precision`, `scale`, `nullable` (bool)
-NOT `column_name`, `character_maximum_length`, `is_nullable`
-
-### WebSocket disconnects
-Silent exceptions cause disconnects. Test screen methods directly:
-```bash
-ssh doug@192.168.20.19 "docker exec dk400-web python3 -c '
-from src.dk400.web.screens import ScreenManager
-sm = ScreenManager()
-# test your method
-'"
-```
-
-## Testing
-
-```bash
-# Syntax check
-python3 -m py_compile src/dk400/web/screens.py
-
-# Direct DB query
-ssh doug@192.168.20.19 "docker exec dk400-postgres psql -U dk400 -c 'SELECT * FROM qsys.users;'"
-
-# Function test
-ssh doug@192.168.20.19 "docker exec dk400-web python3 -c 'from src.dk400.web.database import list_schemas; print(list_schemas())'"
-
-# Reset password
-ssh doug@192.168.20.19 "docker exec dk400-web python3 -c 'from src.dk400.web.users import user_manager; print(user_manager.change_password(\"USER\", \"PASS\"))'"
-```
-
-## Fixer Module
-
-Issue tracking and remediation toolkit built into dk400.
-
-### Usage
-
-```python
-from dk400.fixer import report_issue, resolve_issue, send_telegram
-
-# Report an issue (auto-remediation optional)
-result = await report_issue(
-    issue_type='container_down',
-    target='nginx',
-    error_message='Container not running',
-    severity='error',           # critical, error, warning, info
-    host='192.168.20.19',       # optional
-    context={'exit_code': 1},   # optional metadata
-    auto_remediate=True,        # attempt automatic fix
-)
-
-# Result contains:
-# - issue_id: int
-# - is_new: bool (new vs recurring)
-# - remediated: bool
-# - method: 'runbook', 'claude', 'escalated', 'none'
-# - message: str
-
-# Mark issue as resolved
-await resolve_issue(issue_type='container_down', target='nginx')
-
-# Send notification directly
-await send_telegram("Service restored", target="nginx")
-```
-
-### In Celery Tasks (sync context)
-
-```python
-import asyncio
-from dk400.fixer import report_issue
-
-def my_task():
-    result = asyncio.run(report_issue(
-        issue_type='backup_failure',
-        target='bitwarden',
-        error_message='Backup command failed',
-    ))
-    if result['remediated']:
-        print(f"Fixed via {result['method']}")
-```
-
-### Available Functions
-
-| Function | Purpose |
-|----------|---------|
-| `report_issue()` | Create/update issue, optionally remediate |
-| `resolve_issue()` | Mark issue as resolved |
-| `get_issue(id)` | Get issue by ID |
-| `get_open_issues()` | List all open issues |
-| `attempt_remediation()` | Try to fix without creating issue |
-| `execute_runbook()` | Run specific runbook |
-| `ask_claude()` | Get Claude's analysis |
-| `send_telegram()` | Send Telegram notification |
-
-### Environment Variables
-
-```bash
-# Database (required)
-FIXER_DB_HOST=dk400-postgres
-FIXER_DB_PORT=5432
-FIXER_DB_NAME=dk400
-FIXER_DB_USER=fixer
-FIXER_DB_PASSWORD=<password>
-
-# Notifications (optional)
-FIXER_COMMS_URL=http://192.168.20.19:8440/send
-
-# Claude AI (optional, for auto-remediation)
-ANTHROPIC_API_KEY=<key>
-```
-
-### Database
-
-Fixer uses the `fixer` schema in the `dk400` database:
-
-| Table | Purpose |
-|-------|---------|
-| `fixer.unified_issues` | All tracked issues |
-| `fixer.issue_actions` | Actions taken on issues |
-| `fixer.telegram_log` | Notification history |
-
----
-
-## Full Documentation
-
-See `.claude/skills/dk400/skill.md` for complete development guide.
