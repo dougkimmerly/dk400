@@ -27,5 +27,13 @@ class Settings:
     # Logging
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # NetBox (used cross-cuttingly by docker_sync, netalertx_sync,
+    # netbox_maint, audit_netbox_duplicates, service_reconciliation).
+    # Programs were already reading settings.netbox_url/token; without
+    # these declarations they hit AttributeError. Pragmatic exception
+    # to "platform only" — every dk400 instance talks to a NetBox.
+    netbox_url: str = os.getenv("NETBOX_URL", "")
+    netbox_token: str = os.getenv("NETBOX_TOKEN", "")
+
 
 settings = Settings()
