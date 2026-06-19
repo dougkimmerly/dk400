@@ -1,144 +1,31 @@
-# DK/400 - Complete AS/400-style System
-# All components as one unified "machine"
-name: dk400
+# dk400 - AS/400-inspired job queue system
+#
+# Minimal deployment: dk400 + redis
+# Extend this for your deployment (add volumes, env vars, networks)
 
 services:
-  # ==========================================================================
-  # PostgreSQL Database (like AS/400 disk storage)
-  # ==========================================================================
-  dk400-postgres:
-    image: postgres:16-alpine
-    container_name: dk400-postgres
+  dk400:
+    build: .
+    container_name: dk400
     restart: unless-stopped
+    ports:
+      - "8400:8400"   # API
+      - "8500:8500"   # Web UI
     environment:
-      POSTGRES_DB: dk400
-      POSTGRES_USER: dk400
-      POSTGRES_PASSWORD: dk400secret
-    volumes:
-      - ./data/postgres:/var/lib/postgresql/data
-      - ./init:/docker-entrypoint-initdb.d:ro
+      DATABASE_URL: postgresql://${DB_USER:-dk400}:${DB_PASSWORD:-dk400}@${DB_HOST:-dk400-postgres}:5432/${DB_NAME:-dk400}
+      REDIS_URL: redis://dk400-redis:6379/0
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      TZ: ${TZ:-America/New_York}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dk400 -d dk400"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - dk400
-
-  # ==========================================================================
-  # Redis (like AS/400 job queues)
-  # ==========================================================================
-  dk400-redis:
-    image: redis:7-alpine
-    container_name: dk400-redis
-    restart: unless-stopped
-    volumes:
-      - ./data/redis:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "curl", "-f", "http://localhost:8400/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-    networks:
-      - dk400
-
-  # ==========================================================================
-  # Celery Worker (QBATCH subsystem)
-  # ==========================================================================
-  dk400-qbatch:
-    build: .
-    container_name: dk400-qbatch
-    command: celery -A src.dk400.celery_app worker --loglevel=info --concurrency=4 -n qbatch@%h
-    restart: unless-stopped
+      start_period: 30s
     depends_on:
-      dk400-redis:
-        condition: service_healthy
-      dk400-postgres:
-        condition: service_healthy
-    environment:
-      CELERY_BROKER_URL: redis://dk400-redis:6379/0
-      CELERY_RESULT_BACKEND: redis://dk400-redis:6379/1
-      DK400_DB_HOST: dk400-postgres
-      DK400_DB_PORT: 5432
-      DK400_DB_NAME: dk400
-      DK400_DB_USER: dk400
-      DK400_DB_PASSWORD: dk400secret
-    volumes:
-      - ./src:/app/src:ro
-    networks:
-      - dk400
+      - redis
 
-  # ==========================================================================
-  # Celery Beat Scheduler (QSCD - Job Scheduler)
-  # ==========================================================================
-  dk400-beat:
-    build: .
-    container_name: dk400-beat
-    command: celery -A src.dk400.celery_app beat --loglevel=info -s /app/data/celerybeat-schedule
+  redis:
+    image: redis:alpine
+    container_name: dk400-redis
     restart: unless-stopped
-    depends_on:
-      dk400-redis:
-        condition: service_healthy
-      dk400-postgres:
-        condition: service_healthy
-    environment:
-      CELERY_BROKER_URL: redis://dk400-redis:6379/0
-      DK400_DB_HOST: dk400-postgres
-      DK400_DB_PORT: 5432
-      DK400_DB_NAME: dk400
-      DK400_DB_USER: dk400
-      DK400_DB_PASSWORD: dk400secret
-    volumes:
-      - ./src:/app/src:ro
-      - ./data/celery:/app/data
-    networks:
-      - dk400
-
-  # ==========================================================================
-  # Flower (Job Monitoring - like WRKACTJOB)
-  # ==========================================================================
-  dk400-flower:
-    image: mher/flower:2.0
-    container_name: dk400-flower
-    command: celery --broker=redis://dk400-redis:6379/0 flower --port=5555
-    ports:
-      - "5555:5555"
-    depends_on:
-      - dk400-redis
-    networks:
-      - dk400
-    restart: unless-stopped
-
-  # ==========================================================================
-  # Web Terminal (5250 emulator - like interactive subsystem)
-  # ==========================================================================
-  dk400-web:
-    build:
-      context: .
-      dockerfile: Dockerfile.web
-    container_name: dk400-web
-    restart: unless-stopped
-    ports:
-      - "8400:8400"
-    environment:
-      CELERY_BROKER_URL: redis://dk400-redis:6379/0
-      DK400_DB_HOST: dk400-postgres
-      DK400_DB_PORT: 5432
-      DK400_DB_NAME: dk400
-      DK400_DB_USER: dk400
-      DK400_DB_PASSWORD: dk400secret
-    volumes:
-      - ./src:/app/src:ro
-      - ./data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - dk400
-    depends_on:
-      dk400-redis:
-        condition: service_healthy
-      dk400-postgres:
-        condition: service_healthy
-
-networks:
-  dk400:
-    driver: bridge
