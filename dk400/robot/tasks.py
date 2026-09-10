@@ -14,6 +14,10 @@ from celery import current_app
 
 logger = logging.getLogger(__name__)
 
+# Job type recorded in qsys._jobhst for runs triggered by the Robot scheduler,
+# as opposed to interactive submissions.
+JOB_TYPE_SCHEDULED = "SCHEDULED"
+
 
 def _import_program(program_name: str):
     """Import a program module, searching deployment programs first.
@@ -55,6 +59,34 @@ def update_last_run(program_name: str):
         logger.warning(f"Failed to update last_run for {program_name}: {e}")
 
 
+def _write_job_history(
+    job_name: str,
+    status: str,
+    started_at: datetime,
+    completed_at: datetime,
+    result: str = None,
+    error: str = None,
+):
+    """Insert one row into qsys._jobhst for a completed scheduled run."""
+    try:
+        import psycopg2
+        from dk400.config import settings
+
+        conn = psycopg2.connect(settings.database_url)
+        conn.autocommit = True
+
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO qsys._jobhst
+                    (job_name, job_type, status, submitted_by, started_at, completed_at, result, error)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (job_name, JOB_TYPE_SCHEDULED, status, 'SYSTEM', started_at, completed_at, result, error))
+
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Failed to write job history for {job_name}: {e}")
+
+
 @current_app.task(bind=True)
 def run_program(self, program_name: str, **kwargs) -> Dict[str, Any]:
     """
@@ -87,11 +119,16 @@ def run_program(self, program_name: str, **kwargs) -> Dict[str, Any]:
         else:
             result = run_func(**kwargs)
 
-        duration = (datetime.now(timezone.utc) - start).total_seconds()
+        end = datetime.now(timezone.utc)
+        duration = (end - start).total_seconds()
         logger.info(f"Program {program_name} completed in {duration:.1f}s")
 
         # Update last_run in database
         update_last_run(program_name)
+        _write_job_history(
+            program_name, "COMPLETE", start, end,
+            result=str(result) if result is not None else None,
+        )
 
         return {
             "program": program_name,
@@ -101,8 +138,12 @@ def run_program(self, program_name: str, **kwargs) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        duration = (datetime.now(timezone.utc) - start).total_seconds()
+        end = datetime.now(timezone.utc)
+        duration = (end - start).total_seconds()
         logger.error(f"Program {program_name} failed: {e}")
+
+        update_last_run(program_name)
+        _write_job_history(program_name, "ERROR", start, end, error=str(e))
 
         return {
             "program": program_name,
