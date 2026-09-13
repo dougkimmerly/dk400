@@ -77,13 +77,28 @@ class DatabaseScheduler(Scheduler):
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute("""
                     SELECT name, text, command, frequency, schedule_date,
-                           schedule_time, days_of_week, status
+                           schedule_time, days_of_week, status, created_by
                     FROM qsys._jobscde
                     WHERE status = '*ACTIVE'
                 """)
 
                 new_schedule = {}
                 for row in cur.fetchall():
+                    if row.get('created_by') == 'QSYS':
+                        # 'QSYS' marks rows owned by dk400.web.job_scheduler's
+                        # in-process APScheduler registry (see that module's
+                        # _ensure_job_in_database/add_job_entry), e.g. QNTPSYNC.
+                        # Those jobs already run in the web process; scheduling
+                        # them again here would have Celery Beat dispatch
+                        # dk400.robot.tasks.run_program for a program name that
+                        # has no programs/dk400.programs module, which fails
+                        # every time with "Program not found".
+                        logger.debug(
+                            f"Job {row['name']}: owned by in-process job "
+                            "registry (created_by=QSYS), skipping"
+                        )
+                        continue
+
                     entry = self._row_to_schedule_entry(row)
                     if entry:
                         new_schedule[row['name']] = entry

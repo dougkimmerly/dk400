@@ -173,7 +173,13 @@ def _add_builtin_jobs():
 
 
 def _ensure_job_in_database(name: str, text: str, command: str, frequency: str):
-    """Ensure a job exists in the _jobscde table for WRKJOBSCDE display."""
+    """Ensure a job exists in the _jobscde table for WRKJOBSCDE display.
+
+    created_by='QSYS' marks this row as owned by this in-process registry —
+    dk400/robot/db_scheduler.py skips '*ACTIVE' rows with created_by='QSYS'
+    so Celery Beat doesn't also dispatch them (they have no matching
+    programs/dk400.programs module for Robot's run_program task to find).
+    """
     try:
         from dk400.web.database import get_cursor
 
@@ -284,6 +290,8 @@ def add_job_entry(name: str, command: str, frequency: str = '*HOURLY',
         frequency: *ONCE, *HOURLY, *DAILY, *WEEKLY, *MONTHLY
         schedule_time: Time to run (HH:MM format)
         text: Description
+
+    Written with created_by='QSYS' — see _ensure_job_in_database for why.
     """
     try:
         from dk400.web.database import get_cursor

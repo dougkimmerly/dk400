@@ -3,6 +3,39 @@
 Non-architectural decisions and known gaps, tracked here until they're worked
 or promoted to an ADR.
 
+## 2026-09-13 — QNTPSYNC (and any in-process job) dispatched twice, one path always failing
+
+**Finding:** two schedulers both read `qsys._jobscde`: `dk400/web/job_scheduler.py`
+(APScheduler, in the web process) only runs a row if its name is registered
+via `@register_job`, logging "not in registry, skipping" otherwise —
+correct. `dk400/robot/db_scheduler.py`'s `_load_schedule_from_db()` (Celery
+Beat) turned *every* `*ACTIVE` row into a `ScheduleEntry` for
+`dk400.robot.tasks.run_program`, with no equivalent exclusion. QNTPSYNC is
+registered in `job_scheduler.JOB_REGISTRY` and also inserted into
+`_jobscde` (by `_ensure_job_in_database`, so it shows up in `WRKJOBSCDE`),
+so Celery Beat scheduled it too — and `run_program` always failed with
+"Program not found: QNTPSYNC", since QNTPSYNC has no
+`programs`/`dk400.programs` module; it only exists as an in-process
+function. This ran hourly at every deployment, silently, until sites
+started keeping `_jobhst` history (see the entry below) and it surfaced as
+a recurring false "job failing" alert.
+
+**Fix:** `job_scheduler._ensure_job_in_database` / `add_job_entry` already
+wrote these rows with `created_by='QSYS'`, coincidentally distinct from the
+`'SYSTEM'`/session-user default every other `_jobscde` insert path uses.
+Made that distinction load-bearing: `db_scheduler._load_schedule_from_db()`
+now skips `*ACTIVE` rows with `created_by='QSYS'` before turning them into
+Celery `ScheduleEntry`s, and both `job_scheduler.py` insert sites got a
+comment documenting the contract. This avoids importing
+`dk400.web.job_scheduler` (or anything from `dk400/web/`) into the Celery
+Beat process — Robot's `_jobscde` scheduling stays decided entirely by a
+column already on the row. Covered by `tests/test_db_scheduler.py`.
+
+**Deployment note:** this fix lives in the engine. It only reaches a
+deployment once that deployment bumps its `engine/` submodule — until then,
+QNTPSYNC (or any other in-process-registry job already recorded in
+`_jobscde`) keeps double-firing there.
+
 ## 2026-09-10 — `qsys._jobhst` had no producer
 
 **Finding:** the table, its grants, and the `WRKJOBHST` / `DSPJOBLOG` read
